@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const RESET: &str = "\x1b[0m";
 pub const DIM: &str = "\x1b[2m";
 pub const BOLD: &str = "\x1b[1m";
-pub const ITALIC: &str = "\x1b[3m";
 
 pub const RED: &str = "\x1b[31m";
 pub const GREEN: &str = "\x1b[32m";
@@ -24,9 +23,8 @@ pub const GRAY: &str = "\x1b[90m";
 
 pub const BRIGHT_MAGENTA: &str = "\x1b[95m";
 
-// 256-color variants for the mode words.
-pub const VIOLET: &str = "\x1b[38;5;141m"; // soft purple — "thinking" mode
-pub const AMBER: &str = "\x1b[38;5;215m";  // distinct from yellow — output-style word
+// 256-color variant for the output-style word.
+pub const AMBER: &str = "\x1b[38;5;215m";  // distinct from yellow
 
 pub const BLINK: &str = "\x1b[5m";
 

@@ -40,9 +40,8 @@ where it lives.
 | Boss-fight mode | `src/ansi.rs` :: `gradient_bar` | ≥85% crit red + ▒ damage cells; ≥90% adds ANSI blink + █/▓ flicker |
 | Context window size | `src/format.rs` :: `fmt_ctx_size` | `1m` / `1.5m` / `200k` |
 | `200k+` overflow warn | `src/render.rs` | Red-signal |
-| Effort level | `src/render.rs` | `max` / `xhigh` are red-signal |
-| Thinking mode | `src/render.rs` | Violet italic |
-| Fast mode | `src/render.rs` | Bright magenta bold |
+| Effort level | `src/segments/capabilities.rs` | `max` / `xhigh` are red-signal. Subsumes thinking — CC's `/effort` controls both. |
+| Fast mode | `src/segments/capabilities.rs` | Bright magenta bold |
 | Output style + plugins | `src/render.rs` :: `active_plugin_styles` | Plugin styles opt-in via `STATUSLINE_SHOW_PLUGINS=1` |
 
 ### Rate limits + cost

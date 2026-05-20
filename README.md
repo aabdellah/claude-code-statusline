@@ -7,8 +7,8 @@ for narrow terminals and a CRIT banner when multiple red signals fire at once.
 
 ```
 Opus 4.7 · banknet2-retail/main ●3 ↑2 wt:5 2stale #247 · todo +4 ·
-ctx 78% ████████░░ 1m · xhigh thinking · 5h 64%→1h12m 7d 71%→98% ·
-cache 84% ttl 2:47 · $4.21 $12.4/h +247/-89 $0.017/LOC mpt 14 · 142t/s · 47m
+ctx 78% ████████░░ 1m · xhigh · 5h 64%→1h12m 7d 71%→98% ·
+cache 84% ttl 2:47 · $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 41% · 47m
 ```
 
 Written in Rust, ships as a single ~1.6 MB binary with zero runtime

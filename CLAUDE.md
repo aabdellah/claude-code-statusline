@@ -97,6 +97,14 @@ cargo build --release
   CC doesn't differentiate subscribers from API users in the JSON, so the
   same field has different meaning depending on the user.
 
+- **`thinking.enabled` is redundant with effort level — we don't render
+  it as a separate word.** CC's `/effort` controls both: effort >= "high"
+  implies thinking is on; below that it's off. So `effort: max` and
+  `thinking: true` always come together in practice. We keep
+  `input.thinking` parsed (forward-compat in case CC decouples them) but
+  only render the effort word. Don't re-add a "thinking" indicator
+  without verifying the fields can actually disagree.
+
 ## Conventions
 
 - **Test ANSI-bearing output by stripping escapes first** —

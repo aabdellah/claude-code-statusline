@@ -1,12 +1,20 @@
-//! Effort + thinking + fast — the model-state capabilities you've set
-//! that affect cost/quality. Examples:
-//!   full     "medium thinking fast"
-//!   compact  "mediumTF"
-//!   micro    "medTF" (3-char effort + 1-char thinking + 1-char fast)
+//! Effort + fast — the model-state capabilities you've set that affect
+//! cost/quality.
+//!   full     "medium fast"
+//!   compact  "mediumF"
+//!   micro    "medF"
 //!
 //! Contributes 1 red signal at xhigh/max effort.
+//!
+//! Note: we deliberately do NOT render `thinking.enabled` separately. In
+//! current Claude Code, `/effort` is the user-facing control, and effort
+//! level >= "high" implies thinking is on; effort < "high" implies it's
+//! off. So `thinking.enabled` is effectively redundant with the effort
+//! word. We keep the field parsed in `input.rs` for forward compatibility
+//! (if CC ever decouples them, we can re-add). Until then, just the
+//! effort word — aligned with how CC talks about it.
 
-use crate::ansi::{BOLD, BRIGHT_MAGENTA, DIM, GREEN, ITALIC, RED, RESET, VIOLET, YELLOW};
+use crate::ansi::{BOLD, BRIGHT_MAGENTA, DIM, GREEN, RED, YELLOW};
 use crate::context::RenderContext;
 use crate::layout::{Priority, Seg};
 
@@ -25,22 +33,18 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
             _ => DIM.to_string(),
         };
         let micro_lvl: String = lvl.chars().take(3).collect();
-        full_bits.push(format!("{}{}{}", col, lvl, RESET));
-        compact_bits.push(format!("{}{}{}", col, lvl, RESET));
-        micro_bits.push(format!("{}{}{}", col, micro_lvl, RESET));
+        full_bits.push(format!("{}{}{}", col, lvl, crate::ansi::RESET));
+        compact_bits.push(format!("{}{}{}", col, lvl, crate::ansi::RESET));
+        micro_bits.push(format!("{}{}{}", col, micro_lvl, crate::ansi::RESET));
         if lvl == "max" || lvl == "xhigh" {
             is_red = true;
         }
     }
-    if ctx.input.thinking.as_ref().and_then(|t| t.enabled).unwrap_or(false) {
-        full_bits.push(format!("{}{}thinking{}", ITALIC, VIOLET, RESET));
-        compact_bits.push(format!("{}{}T{}", ITALIC, VIOLET, RESET));
-        micro_bits.push(format!("{}{}T{}", ITALIC, VIOLET, RESET));
-    }
+
     if ctx.input.fast_mode.unwrap_or(false) {
-        full_bits.push(format!("{}{}fast{}", BOLD, BRIGHT_MAGENTA, RESET));
-        compact_bits.push(format!("{}{}F{}", BOLD, BRIGHT_MAGENTA, RESET));
-        micro_bits.push(format!("{}{}F{}", BOLD, BRIGHT_MAGENTA, RESET));
+        full_bits.push(format!("{}{}fast{}", BOLD, BRIGHT_MAGENTA, crate::ansi::RESET));
+        compact_bits.push(format!("{}{}F{}", BOLD, BRIGHT_MAGENTA, crate::ansi::RESET));
+        micro_bits.push(format!("{}{}F{}", BOLD, BRIGHT_MAGENTA, crate::ansi::RESET));
     }
 
     if full_bits.is_empty() {
