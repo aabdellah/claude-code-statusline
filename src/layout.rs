@@ -269,6 +269,7 @@ mod tests {
             mode,
             hidden: Default::default(),
             width_override: None,
+            width_margin: 0,
             debug_timing: false,
             debug_width: false,
             show_plugins: false,

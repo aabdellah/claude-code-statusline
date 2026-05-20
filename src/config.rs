@@ -37,6 +37,12 @@ pub struct Config {
     pub mode: Mode,
     pub hidden: HashSet<String>,
     pub width_override: Option<u16>,
+    /// Total cells subtracted from detected terminal width before fitting.
+    /// Claude Code's chat UI draws 2 cells of frame on EACH side of the
+    /// pane (so 4 cells of invisible padding total). Default `4` accounts
+    /// for this — tmux reports the full pane width, which is wider than
+    /// CC's actual content area. Override via STATUSLINE_WIDTH_MARGIN.
+    pub width_margin: u16,
     pub debug_timing: bool,
     pub debug_width: bool,
     pub show_plugins: bool,
@@ -56,10 +62,16 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .filter(|&n: &u16| n > 0);
 
+        let width_margin = env::var("STATUSLINE_WIDTH_MARGIN")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4);
+
         Self {
             mode: Mode::from_env(),
             hidden,
             width_override,
+            width_margin,
             debug_timing: env::var("STATUSLINE_DEBUG_TIMING").as_deref() == Ok("1"),
             debug_width: env::var("STATUSLINE_DEBUG_WIDTH").as_deref() == Ok("1"),
             show_plugins: env::var("STATUSLINE_SHOW_PLUGINS").as_deref() == Ok("1"),

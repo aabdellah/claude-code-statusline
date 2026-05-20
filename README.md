@@ -69,6 +69,7 @@ Restart Claude Code (or just start a new turn — settings reload between turns)
 | `STATUSLINE_HIDE=mileage,perf,duration` | Suppress specific segments |
 | `STATUSLINE_MODE=auto\|full\|compact` | `auto` (default) = adaptive layout; `full` = every segment at full text; `compact` = every segment at smallest variant |
 | `STATUSLINE_WIDTH=N` | Force terminal width (for testing) |
+| `STATUSLINE_WIDTH_MARGIN=N` | Cells subtracted from detected width before fitting (default `4` — Claude Code draws 2 cells of frame on each side of the pane). Set to `0` if using a host without margins. |
 | `STATUSLINE_DEBUG_WIDTH=1` | Persist width-detection trace to `/tmp` |
 
 ## Source layout

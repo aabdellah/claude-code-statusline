@@ -523,12 +523,19 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
     let term_width = config::timed("width-detect", cfg.debug_timing, || width::detect_term_width(cfg));
     let full_sep = format!(" {}·{} ", DIM, RESET);
 
-    // CRIT banner consumes width too — subtract it from the budget before fitting.
+    // Subtract a safety margin so we don't bump into the host UI's frame.
+    // Claude Code draws 2 cells of frame on EACH side of its chat pane,
+    // so the visible content width is pane_width - 4. tmux reports the full
+    // pane width, which doesn't account for CC's frame. Default margin (4)
+    // covers CC; override via STATUSLINE_WIDTH_MARGIN for other hosts.
+    // Then if CRIT will be prepended, leave room for it too.
     let crit_active = bag.red_signals >= 3;
     let crit_prefix = format!("{}{}CRIT{}{}", BOLD, RED, bag.red_signals, RESET);
     let crit_prefix_visible = ansi_mod::visible_length(&crit_prefix) + ansi_mod::visible_length(&full_sep);
     let effective_width = term_width.map(|w| {
-        if crit_active { w.saturating_sub(crit_prefix_visible as u16) } else { w }
+        let mut budget = w.saturating_sub(cfg.width_margin);
+        if crit_active { budget = budget.saturating_sub(crit_prefix_visible as u16); }
+        budget
     });
 
     let fit = bag.fit(effective_width, &full_sep);

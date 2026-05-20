@@ -150,13 +150,24 @@ fn ioctl_winsize_cols(fd: i32) -> Option<u16> {
     }
 }
 
+/// Ask tmux for THIS pane's width — the one CC is running in, not the
+/// pane that happens to be focused right now.
+///
+/// Without `-t <target>`, `tmux display -p` operates on the focused pane,
+/// which is rarely what you want from a subprocess. Tmux sets `TMUX_PANE`
+/// in the subprocess env to identify the pane that spawned us; we target
+/// that explicitly. Fall back to the focused pane only if `TMUX_PANE` is
+/// somehow unset (shouldn't happen inside a real tmux session).
 fn query_tmux() -> Option<u16> {
-    let out = Command::new("tmux")
-        .args(["display", "-p", "#{pane_width}"])
+    let mut cmd = Command::new("tmux");
+    cmd.arg("display").arg("-p");
+    if let Ok(pane) = std::env::var("TMUX_PANE") {
+        cmd.arg("-t").arg(&pane);
+    }
+    cmd.arg("#{pane_width}")
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+        .stderr(Stdio::null());
+    let out = cmd.output().ok()?;
     if !out.status.success() { return None; }
     String::from_utf8(out.stdout).ok()?.trim().parse().ok()
 }
