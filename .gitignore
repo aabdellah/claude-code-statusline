@@ -1,0 +1,8 @@
+# Rust build artifacts
+/target
+
+# macOS
+.DS_Store
+
+# Cargo lockfile is intentionally checked in (binary crate convention)
+# — do NOT add Cargo.lock here.

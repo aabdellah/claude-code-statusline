@@ -1,0 +1,45 @@
+[package]
+name = "claude-code-statusline"
+version = "0.1.0"
+edition = "2024"
+description = "Statusline for Claude Code tuned for power-user / multi-agent / 1M-context workflows"
+license = "MIT"
+
+[[bin]]
+name = "statusline"
+path = "src/main.rs"
+
+[dependencies]
+# Typed JSON parsing for CC's statusline input. derive feature lets us
+# annotate structs with #[derive(Deserialize)].
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# TODO/FIXME pattern + destructive-command detection.
+regex = "1"
+
+# ioctl(TIOCGWINSZ) for the ancestor-PTY width fallback. Tiny dep — pure
+# bindings, no runtime.
+libc = "0.2"
+
+[profile.release]
+# Optimize for binary size — this is a CLI that ships as a single file. The
+# small perf hit vs opt-level=3 doesn't matter when our hot path is dominated
+# by git subprocesses anyway.
+opt-level = "z"
+
+# Link-time optimization — inlines across crate boundaries, removes unused
+# code paths. Both smaller and faster, at the cost of longer link time.
+lto = true
+
+# Single codegen unit lets LTO do its best work. Slower compile, smaller binary.
+codegen-units = 1
+
+# Strip debug symbols + symbol table from the final binary.
+strip = true
+
+# Abort instead of unwinding on panic. Saves the unwinding tables (~50-100kb)
+# and makes the binary slightly faster. Tradeoff: we lose stack traces on
+# panic. For a statusline that runs in milliseconds, that's the right call —
+# we'd rather have a smaller binary; debug builds still get unwinding.
+panic = "abort"
