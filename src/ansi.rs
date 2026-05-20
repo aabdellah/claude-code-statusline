@@ -125,7 +125,11 @@ fn rand_bool_35pct() -> bool {
 /// filled cell's RGB. Above 85% the bar enters "boss-fight" mode — filled
 /// cells become solid crit-red, empty cells switch to a damaged-bar character
 /// (`▒`). At ≥90%, an ANSI blink + per-render █/▓ flicker is added.
-pub fn gradient_bar(pct: f64, width: usize) -> String {
+///
+/// `no_blink` disables the ANSI blink (e.g. for terminals where it's jarring
+/// or unsupported). Propagated from `Config` so the env-var read happens
+/// once at startup, not on every render.
+pub fn gradient_bar(pct: f64, width: usize, no_blink: bool) -> String {
     let p = pct.clamp(0.0, 100.0);
     let filled = ((p / 100.0) * width as f64).round() as usize;
     let critical = p >= 85.0;
@@ -137,8 +141,6 @@ pub fn gradient_bar(pct: f64, width: usize) -> String {
         // ≥90% adds two layered effects:
         //   (a) ANSI blink `\x1b[5m` — terminal-driven, ~2 Hz, independent of CC renders.
         //   (b) Render-driven flicker: filled cells randomly mix █/▓ each render.
-        // STATUSLINE_NO_BLINK=1 disables (a) for terminals that handle it poorly.
-        let no_blink = std::env::var_os("STATUSLINE_NO_BLINK").as_deref() == Some("1".as_ref());
         if extreme && !no_blink {
             out.push_str(BLINK);
         }
@@ -207,7 +209,7 @@ mod tests {
 
     #[test]
     fn gradient_bar_renders_filled_proportional() {
-        let bar = gradient_bar(50.0, 10);
+        let bar = gradient_bar(50.0, 10, false);
         // Bar contains '█' for filled, '░' for empty — and ANSI escapes around them.
         let visible = bar.chars().filter(|c| *c == '█' || *c == '░').count();
         assert_eq!(visible, 10);

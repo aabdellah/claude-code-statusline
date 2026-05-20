@@ -62,6 +62,18 @@ fn reconcile_pending_fetches() {
         if !name.starts_with(TMP_PREFIX) || !name.ends_with(TMP_SUFFIX) {
             continue;
         }
+        // Reject symlinks immediately — defense against symlink TOCTOU where
+        // an attacker in a world-writable /tmp swaps a tmp file for a symlink
+        // pointing at a sensitive file we'd then promote into the cache via
+        // atomic rename. symlink_metadata() does NOT follow symlinks.
+        match fs::symlink_metadata(&path) {
+            Ok(m) if m.file_type().is_symlink() => {
+                let _ = fs::remove_file(&path);
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => continue,
+        }
         // Only reconcile files older than 2s — anything fresher might still
         // be mid-write by an in-flight curl, and we'd rather wait for the
         // next render than promote a half-written file.

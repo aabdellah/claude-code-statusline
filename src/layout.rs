@@ -30,6 +30,11 @@ pub enum Priority {
 /// One rendered segment with up to three variants. `full` is required;
 /// `compact` and `micro` are optional shorter forms the fitter can fall
 /// back to under width pressure.
+///
+/// `red_count` is the number of "red signals" this segment contributes
+/// to the global CRIT counter — most segments contribute 0 or 1, but some
+/// (repo with multiple problems, context with both >85% AND >200k) can
+/// contribute up to 3. A CRIT banner fires when total red_signals ≥ 3.
 #[derive(Debug, Clone)]
 pub struct Seg {
     pub id: &'static str,
@@ -37,12 +42,12 @@ pub struct Seg {
     pub full: String,
     pub compact: Option<String>,
     pub micro: Option<String>,
-    pub is_red: bool,
+    pub red_count: u32,
 }
 
 impl Seg {
     pub fn new(id: &'static str, priority: Priority, full: String) -> Self {
-        Self { id, priority, full, compact: None, micro: None, is_red: false }
+        Self { id, priority, full, compact: None, micro: None, red_count: 0 }
     }
 
     pub fn with_compact(mut self, compact: String) -> Self {
@@ -55,8 +60,18 @@ impl Seg {
         self
     }
 
+    /// Mark this segment as contributing 1 red signal.
     pub fn red(mut self) -> Self {
-        self.is_red = true;
+        self.red_count = 1;
+        self
+    }
+
+    /// Mark this segment as contributing `n` red signals.
+    /// Use when a single segment surfaces multiple distinct concerns
+    /// (e.g. repo with `behind ≥3` AND `>5 stale worktrees` AND
+    /// `PR CHANGES_REQUESTED` could contribute 3).
+    pub fn red_n(mut self, n: u32) -> Self {
+        self.red_count = n;
         self
     }
 }
@@ -105,7 +120,7 @@ impl<'a> SegmentBag<'a> {
 
     pub fn push(&mut self, seg: Seg) {
         if self.cfg.is_hidden(seg.id) { return; }
-        if seg.is_red { self.red_signals += 1; }
+        self.red_signals += seg.red_count;
         self.segs.push(seg);
     }
 
@@ -273,6 +288,7 @@ mod tests {
             debug_timing: false,
             debug_width: false,
             show_plugins: false,
+            no_blink: false,
         }
     }
 

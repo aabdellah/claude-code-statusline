@@ -119,7 +119,7 @@ pub fn fmt_reset_time(secs_or_ms_or_iso: &serde_json::Value) -> String {
     };
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0);
     let mins = ((target_ms - now_ms) as f64 / 60_000.0).round() as i64;
     if mins < 0 { return String::new(); }
@@ -164,9 +164,11 @@ pub(crate) fn parse_rfc3339_ms(s: &str) -> Option<i64> {
             _ => frac,
         };
     }
-    // Timezone
+    // Timezone — REQUIRED per RFC 3339. We don't accept bare local times
+    // because silently treating them as UTC would mis-render reset countdowns
+    // by hours for non-UTC timezones.
     let tz_offset_min: i64 = match bytes.get(idx) {
-        Some(b'Z') | None => 0,
+        Some(b'Z') => 0,
         Some(b'+') | Some(b'-') => {
             let sign = if bytes[idx] == b'+' { 1 } else { -1 };
             let oh: i64 = s.get(idx + 1..idx + 3)?.parse().ok()?;
@@ -426,5 +428,12 @@ mod tests {
         assert_eq!(parse_rfc3339_ms("2026-01-01T00:00:00.500Z"), Some(1767225600500));
         // With offset
         assert_eq!(parse_rfc3339_ms("2026-01-01T00:00:00+02:00"), Some(1767218400000));
+    }
+
+    #[test]
+    fn rfc3339_requires_explicit_timezone() {
+        // Bare time without Z or offset must return None — silently treating
+        // it as UTC would mis-render reset countdowns by hours.
+        assert_eq!(parse_rfc3339_ms("2026-01-01T00:00:00"), None);
     }
 }

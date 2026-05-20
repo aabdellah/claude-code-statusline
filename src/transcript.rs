@@ -69,8 +69,8 @@ fn read_transcript_tail_n(transcript_path: Option<&str>, max_bytes: u64) -> Vec<
 pub fn cache_ttl_ms_remaining(entries: &[Value]) -> Option<i64> {
     let now_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .ok()?;
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())?;
     for e in entries.iter().rev() {
         if let Some(ts) = e.get("timestamp").and_then(|v| v.as_str()) {
             if let Some(t) = parse_rfc3339_ms(ts) {
@@ -159,8 +159,13 @@ pub fn yak_depth(entries: &[Value]) -> u32 {
         loop {
             let src = current.get("sourceToolAssistantUUID").and_then(|v| v.as_str());
             let Some(src) = src else { break; };
-            let cur_uuid = current.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
-            if !seen.insert(cur_uuid) { break; }
+            // Only insert when we have a real UUID — using "" as a sentinel
+            // would collide for ALL entries missing a uuid, causing the
+            // cycle detector to break the walk early on the second such
+            // entry (incorrectly capping depth).
+            if let Some(cur_uuid) = current.get("uuid").and_then(|v| v.as_str()) {
+                if !seen.insert(cur_uuid) { break; }
+            }
             depth += 1;
             let Some(&next_idx) = by_uuid.get(src) else { break; };
             current = &entries[next_idx];
@@ -243,5 +248,20 @@ mod tests {
             json!({"uuid": "leaf", "type": "assistant", "sourceToolAssistantUUID": "mid"}),
         ];
         assert_eq!(yak_depth(&entries), 2);
+    }
+
+    #[test]
+    fn yak_depth_handles_missing_uuid_without_cycle_false_positive() {
+        // Both intermediate entries have no `uuid` — the old code used `""`
+        // as a sentinel which would collide on the second visit and break
+        // the walk early, capping depth at 1. The fixed code only inserts
+        // real UUIDs into `seen`, so the walk continues correctly.
+        let entries = vec![
+            json!({"uuid": "root", "type": "assistant"}),
+            json!({"type": "assistant", "sourceToolAssistantUUID": "root"}),
+            json!({"type": "assistant", "sourceToolAssistantUUID": "root"}),
+        ];
+        // The leaf points to root; walk depth = 1 (not 0 due to fake cycle).
+        assert_eq!(yak_depth(&entries), 1);
     }
 }

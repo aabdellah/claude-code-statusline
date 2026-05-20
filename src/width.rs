@@ -131,8 +131,10 @@ pub fn detect_term_width(cfg: &Config) -> Option<u16> {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
         });
-        let _ = fs::write("/tmp/cc-statusline-width.json",
-                          serde_json::to_string_pretty(&payload).unwrap());
+        // Best-effort write — never panic if serialization or write fails.
+        if let Ok(json) = serde_json::to_string_pretty(&payload) {
+            let _ = fs::write("/tmp/cc-statusline-width.json", json);
+        }
     }
 
     result

@@ -46,6 +46,9 @@ pub struct Config {
     pub debug_timing: bool,
     pub debug_width: bool,
     pub show_plugins: bool,
+    /// Disable boss-fight blink at >=90% context — for terminals where ANSI
+    /// blink is jarring or unsupported.
+    pub no_blink: bool,
 }
 
 impl Config {
@@ -75,6 +78,7 @@ impl Config {
             debug_timing: env::var("STATUSLINE_DEBUG_TIMING").as_deref() == Ok("1"),
             debug_width: env::var("STATUSLINE_DEBUG_WIDTH").as_deref() == Ok("1"),
             show_plugins: env::var("STATUSLINE_SHOW_PLUGINS").as_deref() == Ok("1"),
+            no_blink: env::var("STATUSLINE_NO_BLINK").as_deref() == Ok("1"),
         }
     }
 

@@ -7,12 +7,14 @@
 mod ansi;
 mod anthropic;
 mod config;
+mod context;
 mod format;
 mod git;
 mod input;
 mod layout;
 mod pace;
 mod render;
+mod segments;
 mod transcript;
 mod width;
 

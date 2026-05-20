@@ -38,7 +38,7 @@ pub fn seven_day_pace(seven_day: &RateLimitWindow) -> Option<Pace> {
     let window_start = reset_ms - SEVEN_DAY_MS;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0);
     let frac = (now_ms - window_start) as f64 / SEVEN_DAY_MS as f64;
     // <10% elapsed (~17h in): projection too volatile. >100%: window passed.
