@@ -55,15 +55,24 @@ pub fn fmt_dollars_per_loc(usd: f64, lines_added: u64) -> Option<String> {
     Some(format!("${:.3}/LOC", per))
 }
 
-/// LOC accepted per 1k tokens spent — fuel efficiency. Hidden if too few tokens.
-pub fn fmt_mileage(lines_added: u64, total_in: u64, total_out: u64) -> Option<String> {
-    let tokens = total_in + total_out;
-    if tokens < 10_000 { return None; }
+/// Lines accepted per minute of API time — productivity signal showing how
+/// much code is landing for each minute the model was actually active.
+///
+/// This replaces the old `fmt_mileage` (LOC per 1k tokens) which became
+/// mathematically wrong in CC v2.1.132+ when `total_input_tokens` /
+/// `total_output_tokens` changed from cumulative session totals to current
+/// context window snapshots — making the per-token denominator meaningless.
+///
+/// API duration (cumulative session wait-for-model time) is still cumulative,
+/// so the LOC-per-minute ratio is well-defined. Renders as `lpm N`.
+pub fn fmt_lines_per_api_min(lines_added: u64, api_duration_ms: u64) -> Option<String> {
     if lines_added == 0 { return None; }
-    let m = lines_added as f64 / (tokens as f64 / 1000.0);
-    if m >= 100.0 { return Some(format!("mpt {}", m.round() as i64)); }
-    if m >= 10.0 { return Some(format!("mpt {}", m.round() as i64)); }
-    Some(format!("mpt {:.1}", m))
+    if api_duration_ms < 30_000 { return None; } // need >=30s for stability
+    let minutes = api_duration_ms as f64 / 60_000.0;
+    let lpm = lines_added as f64 / minutes;
+    if lpm >= 100.0 { return Some(format!("lpm {}", lpm.round() as i64)); }
+    if lpm >= 10.0 { return Some(format!("lpm {}", lpm.round() as i64)); }
+    Some(format!("lpm {:.1}", lpm))
 }
 
 // --- Time + duration --------------------------------------------------------

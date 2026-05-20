@@ -34,6 +34,7 @@
 //! `repr::counter` or `repr::percent`.
 
 pub mod anthropic;
+pub mod api_time;
 pub mod cache;
 pub mod capabilities;
 pub mod context;
@@ -72,5 +73,6 @@ pub static FUNCS: &[fn(&RenderContext) -> Option<Seg>] = &[
     cache::render,
     cost::render,
     perf::render,
+    api_time::render,
     duration::render,
 ];

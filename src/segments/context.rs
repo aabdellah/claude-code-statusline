@@ -20,7 +20,10 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let bar = ansi::gradient_bar(used_pct, 10, ctx.cfg.no_blink);
     let size = cw.context_window_size.unwrap_or(cw.total_tokens.unwrap_or(0));
     let size_str = fmt_ctx_size(size);
-    let exceeds = cw.exceeds_200k_tokens.unwrap_or(false);
+    // `exceeds_200k_tokens` lives at the TOP LEVEL of CC's JSON, not under
+    // context_window. Reading from the wrong nesting level used to make
+    // this warning silently never fire.
+    let exceeds = ctx.input.exceeds_200k_tokens.unwrap_or(false);
 
     // Full: "ctx 78% [bar] 1m"  + maybe "200k+"
     let head = format!("ctx {}%", used_pct.round() as i64);

@@ -26,6 +26,11 @@ pub struct StatusInput {
     pub cwd: Option<String>,
     pub version: Option<String>,
     pub session_id: Option<String>,
+    /// `exceeds_200k_tokens` is a TOP-LEVEL field in CC's JSON, NOT nested
+    /// under context_window. Was previously misplaced inside ContextWindow,
+    /// which caused the 200k+ warning to never fire (verified against a
+    /// captured v2.1.145 dump where this was true but our code saw None).
+    pub exceeds_200k_tokens: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -72,9 +77,12 @@ pub struct ContextWindow {
     pub remaining_percentage: Option<f64>,
     pub context_window_size: Option<u64>,
     pub total_tokens: Option<u64>,
+    /// As of CC v2.1.132+, these report the CURRENT context window's input
+    /// and output tokens — NOT cumulative session totals. The cache_read
+    /// portion typically dominates total_input_tokens since most of the
+    /// window is the cached prompt prefix.
     pub total_input_tokens: Option<u64>,
     pub total_output_tokens: Option<u64>,
-    pub exceeds_200k_tokens: Option<bool>,
     pub current_usage: Option<CurrentUsage>,
 }
 
@@ -126,7 +134,14 @@ pub struct RateLimitWindow {
 #[serde(default)]
 pub struct Cost {
     pub total_cost_usd: Option<f64>,
+    /// Total session wall-clock — includes you-typing/thinking/local work.
     pub total_duration_ms: Option<u64>,
+    /// Wall-clock spent specifically waiting for Anthropic API responses
+    /// (model thinking + streaming). Added in CC v2.1.132. The ratio
+    /// `total_api_duration_ms / total_duration_ms` is a useful productivity
+    /// signal: low = efficient use of human attention, high = lots of
+    /// passive waiting on the model.
+    pub total_api_duration_ms: Option<u64>,
     pub total_lines_added: Option<u64>,
     pub total_lines_removed: Option<u64>,
 }
