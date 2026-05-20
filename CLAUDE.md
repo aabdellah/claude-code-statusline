@@ -77,6 +77,26 @@ cargo build --release
   was the cause of "yak:1 always" bug in early versions. Latest entry's
   `sourceToolAssistantUUID` chain only.
 
+- **CC renders the statusline ONLY at turn boundaries (between user
+  prompts), not mid-turn.** By the time a render happens, the assistant
+  has finished its response and the latest transcript entry is back in
+  the main thread. Implication: "current state" metrics rarely fire in
+  practice — design new signals as "max this session" / "in last N min"
+  rather than "right now" for them to actually be visible.
+
+- **Fresh / worktree sessions send near-empty JSON until first model
+  interaction.** Only `workspace.*` and `worktree.*` are populated; model,
+  context_window, cost, rate_limits all arrive after the first turn. The
+  minimum-data rendering (just "claude · repo/branch") is expected, not a
+  bug. Each segment's `Option::None` return is what enables this.
+
+- **For subscribers, `cost.total_cost_usd` is NOTIONAL** (what this
+  session would cost at API rates) — not actual billing. Subscribers pay
+  a flat monthly fee; their real budget is the 5h/7d rate-limit windows.
+  Tokens over 200k count ~2x against subscription quotas, not against $.
+  CC doesn't differentiate subscribers from API users in the JSON, so the
+  same field has different meaning depending on the user.
+
 ## Conventions
 
 - **Test ANSI-bearing output by stripping escapes first** —
