@@ -98,12 +98,12 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         .and_then(|w| w.repo.as_ref())
         .and_then(|r| r.name.as_deref());
 
+    // Filesystem fast path: find .git/ once, read branch from HEAD directly.
+    // Avoids ~25ms of git-symbolic-ref + git-rev-parse subprocess overhead.
+    let gitdir = config::timed("gitdir-discover", cfg.debug_timing, || git::find_gitdir(cwd));
     let branch = input.worktree.as_ref().and_then(|w| w.branch.clone())
-        .or_else(|| config::timed("git-branch", cfg.debug_timing,
-                                   || git::git(cwd, &["symbolic-ref", "--short", "HEAD"])))
-        .or_else(|| config::timed("git-branch-fb", cfg.debug_timing,
-                                   || git::git(cwd, &["rev-parse", "--short", "HEAD"])));
-    let in_repo = repo_from_schema.is_some() || branch.is_some();
+        .or_else(|| gitdir.as_deref().and_then(git::branch_or_sha_from_head));
+    let in_repo = repo_from_schema.is_some() || gitdir.is_some();
     let in_worktree = input.worktree.as_ref().map(|w| w.name.is_some()).unwrap_or(false)
         || input.workspace.as_ref().and_then(|w| w.git_worktree).unwrap_or(false);
 
@@ -118,8 +118,20 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         let repo: String = repo_from_schema.map(String::from).unwrap_or_else(||
             cwd.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
         );
-        let status = config::timed("git-status", cfg.debug_timing, || git::git_status(cwd));
-        let wt = config::timed("worktree-stats", cfg.debug_timing, || git::worktree_stats(cwd));
+
+        // Parallelize the three independent git subprocesses with std::thread::scope.
+        // Wall time drops from ~3× (sequential) to ~1× (max of the three).
+        // todo_delta runs pre-emptively even on clean trees — its result is
+        // discarded when status.dirty is false, but the wall-clock overlap
+        // with status + worktree_stats means we pay nothing extra.
+        let (status, wt, t_delta_pre) = config::timed("git-parallel", cfg.debug_timing, || {
+            std::thread::scope(|s| {
+                let h1 = s.spawn(|| git::git_status(cwd));
+                let h2 = s.spawn(|| git::worktree_stats(cwd));
+                let h3 = s.spawn(|| git::todo_delta(cwd));
+                (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap())
+            })
+        });
 
         let branch_str = branch.as_deref().unwrap_or("?");
         let branch_color = if branch_str == "main" || branch_str == "master" {
@@ -207,10 +219,10 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             );
         }
 
-        // 5. TODO/FIXME delta — skip on clean tree (saves ~7ms; diff would be empty)
-        let t_delta = if status.dirty {
-            config::timed("todo-delta", cfg.debug_timing, || git::todo_delta(cwd))
-        } else { 0 };
+        // 5. TODO/FIXME delta — pre-computed in the parallel batch above.
+        // We only USE the value when the tree is dirty; on a clean tree the
+        // diff was empty and t_delta_pre is 0 anyway.
+        let t_delta = if status.dirty { t_delta_pre } else { 0 };
         if t_delta != 0 {
             let sign = if t_delta > 0 {
                 format!("{}+{}{}", ansi::YELLOW, t_delta, RESET)
