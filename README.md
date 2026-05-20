@@ -18,44 +18,52 @@ faster than the first Rust cut that still used `git` subprocesses). Local
 git operations use libgit2 directly; only the anthropic status check
 involves any non-libgit2 file I/O.
 
-## Install
+## Install (any Mac in under a minute)
 
-### Prerequisite — Rust toolchain
-
-```bash
-brew install rust          # macOS
-# or:
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # any *nix
-```
-
-### Build + install the binary
+Prereq: Rust must be available. If not yet installed:
 
 ```bash
-# From the source directory:
-cargo build --release
-
-# Drop the binary somewhere stable:
-mkdir -p ~/.claude/bin
-cp target/release/statusline ~/.claude/bin/cc-statusline
+brew install rust   # macOS
 ```
 
-Wire it into `~/.claude/settings.json` (use `$HOME` — CC doesn't expand `~`):
+Then clone and run the installer:
 
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "$HOME/.claude/bin/cc-statusline"
-  }
-}
+```bash
+git clone git@github.com:aabdellah/claude-code-statusline.git
+cd claude-code-statusline
+./install.sh
 ```
 
-Restart Claude Code (or just start a new turn — settings reload between turns).
+That's it. The installer:
+
+1. Builds the release binary (~30s on first build because libgit2 vendors itself)
+2. Symlinks `~/.claude/bin/cc-statusline` → the freshly-built binary
+3. Patches `~/.claude/settings.json` with the right `statusLine` block (preserves every other key — uses `python3` which is on macOS by default)
+
+Start a new Claude Code turn and the statusline will appear.
+
+### Optional flags
+
+```bash
+./install.sh --with-autobuild   # also install a LaunchAgent that rebuilds
+                                #   the binary on src/ edits (uses cargo-watch)
+./install.sh --uninstall        # remove the symlink + statusLine block + LaunchAgent
+./install.sh --help             # see options
+```
+
+### Updating later
+
+```bash
+git pull && ./install.sh
+```
+
+The installer is idempotent — re-running it is the supported update path.
 
 ## Dependencies on the target machine
 
 - `git` (required for repo state — the binary shells out)
 - `curl` (optional — used for `status.claude.com` background fetch)
+- `python3` (used by the installer to patch settings.json; bundled with macOS)
 - *That's it.* No Node, no Python, no shared libraries beyond `libSystem`
   (macOS) / `glibc` (Linux).
 
