@@ -119,19 +119,10 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             cwd.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
         );
 
-        // Parallelize the three independent git subprocesses with std::thread::scope.
-        // Wall time drops from ~3× (sequential) to ~1× (max of the three).
-        // todo_delta runs pre-emptively even on clean trees — its result is
-        // discarded when status.dirty is false, but the wall-clock overlap
-        // with status + worktree_stats means we pay nothing extra.
-        let (status, wt, t_delta_pre) = config::timed("git-parallel", cfg.debug_timing, || {
-            std::thread::scope(|s| {
-                let h1 = s.spawn(|| git::git_status(cwd));
-                let h2 = s.spawn(|| git::worktree_stats(cwd));
-                let h3 = s.spawn(|| git::todo_delta(cwd));
-                (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap())
-            })
-        });
+        // Each libgit2 call is sub-millisecond; sequential is faster than
+        // threaded because we'd spend more on spawn overhead than we'd save.
+        let status = config::timed("git-status", cfg.debug_timing, || git::git_status(cwd));
+        let wt = config::timed("worktree-stats", cfg.debug_timing, || git::worktree_stats(cwd));
 
         let branch_str = branch.as_deref().unwrap_or("?");
         let branch_color = if branch_str == "main" || branch_str == "master" {
@@ -219,10 +210,12 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             );
         }
 
-        // 5. TODO/FIXME delta — pre-computed in the parallel batch above.
-        // We only USE the value when the tree is dirty; on a clean tree the
-        // diff was empty and t_delta_pre is 0 anyway.
-        let t_delta = if status.dirty { t_delta_pre } else { 0 };
+        // 5. TODO/FIXME delta — skip on clean tree (diff would be empty anyway).
+        // With libgit2 the call is already sub-ms, but the skip is still
+        // marginally cheaper and matches Node-version behavior.
+        let t_delta = if status.dirty {
+            config::timed("todo-delta", cfg.debug_timing, || git::todo_delta(cwd))
+        } else { 0 };
         if t_delta != 0 {
             let sign = if t_delta > 0 {
                 format!("{}+{}{}", ansi::YELLOW, t_delta, RESET)

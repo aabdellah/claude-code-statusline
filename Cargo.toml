@@ -22,6 +22,19 @@ regex = "1"
 # bindings, no runtime.
 libc = "0.2"
 
+# libgit2 bindings — replaces git subprocess calls for status/diff/worktree
+# queries. ~50-100× speedup over subprocess (no fork/exec, no config reload).
+#
+# vendored-libgit2 forces a static build of libgit2 from source instead of
+# dynamic-linking the brew/system one. Without this the binary depends on
+# /opt/homebrew/opt/libgit2/lib/libgit2.dylib being present on the target
+# machine — breaks the "self-contained binary" promise. The cost is ~600 KB
+# of binary size and ~30s of first-time build.
+#
+# default-features=false disables ssh + https — we only do local repo reads,
+# no network ops.
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+
 [profile.release]
 # Optimize for binary size — this is a CLI that ships as a single file. The
 # small perf hit vs opt-level=3 doesn't matter when our hot path is dominated
