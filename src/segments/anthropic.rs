@@ -3,10 +3,11 @@
 //! lazily in the background by `anthropic::anthropic_status`.
 
 use crate::anthropic;
-use crate::ansi::{BOLD, RED, RESET, YELLOW};
+use crate::ansi::{BOLD, RED, YELLOW};
 use crate::config;
 use crate::context::RenderContext;
 use crate::layout::{Priority, Seg};
+use crate::repr;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let status = config::timed("anthropic-status", ctx.cfg.debug_timing, anthropic::anthropic_status)?;
@@ -18,18 +19,12 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     };
     let is_red = status != "minor";
 
-    // Compact: "anth:min" / "anth:maj" / "anth:cri".
-    // Char-boundary safe — never byte-slice; the indicator is unsanitized
-    // upstream input and could be non-ASCII in the future.
+    // Compact value: char-boundary safe truncation (never byte-slice; the
+    // indicator is unsanitized upstream input and could be non-ASCII).
     let short: String = status.chars().take(3).collect();
 
-    let mut seg = Seg::new(
-        "anthropic",
-        Priority::Important,
-        format!("{}anthropic:{}{}", col, status, RESET),
-    )
-    .with_compact(format!("{}anth:{}{}", col, short, RESET));
-
+    let (full, compact) = repr::labeled_status("anthropic", "anth", &status, &short, &col);
+    let mut seg = Seg::new("anthropic", Priority::Important, full).with_compact(compact);
     if is_red {
         seg = seg.red();
     }

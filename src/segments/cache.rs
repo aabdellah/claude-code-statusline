@@ -10,6 +10,7 @@ use crate::ansi::{GREEN, RED, RESET, YELLOW};
 use crate::context::RenderContext;
 use crate::format::fmt_ttl;
 use crate::layout::{Priority, Seg};
+use crate::repr;
 use crate::transcript;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
@@ -27,16 +28,17 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let mut compact_bits: Vec<String> = Vec::new();
 
     if cache_total > 0 {
-        let hit_pct = (cache_read as f64 / cache_total as f64 * 100.0).round() as i64;
-        let col = if hit_pct >= 80 {
+        let hit_pct = cache_read as f64 / cache_total as f64 * 100.0;
+        let col = if hit_pct >= 80.0 {
             GREEN
-        } else if hit_pct >= 50 {
+        } else if hit_pct >= 50.0 {
             YELLOW
         } else {
             RED
         };
-        full_bits.push(format!("{}cache {}%{}", col, hit_pct, RESET));
-        compact_bits.push(format!("{}c:{}{}", col, hit_pct, RESET));
+        let (full, compact) = repr::percent("cache", "c", hit_pct, col);
+        full_bits.push(full);
+        compact_bits.push(compact);
     }
 
     if let Some(ms) = ttl_ms {

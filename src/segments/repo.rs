@@ -11,6 +11,7 @@ use crate::ansi::{BLUE, BOLD, DIM, GREEN, MAGENTA, RED, RESET, YELLOW};
 use crate::context::RenderContext;
 use crate::format::compact_repo_name;
 use crate::layout::{Priority, Seg};
+use crate::repr;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     if !ctx.in_repo {
@@ -91,10 +92,14 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         full.push_str(&format!(" {}[wt{}]{}", DIM, origin_str, RESET));
     }
 
-    // Sibling worktrees + stale count
+    // Sibling worktrees + stale count.
+    // The "wt:N" counter follows the canonical repr::counter shape.
     if wt.extras > 0 {
-        full.push_str(&format!(" {}wt:{}{}", DIM, wt.extras, RESET));
-        compact.push_str(&format!(" {}wt:{}{}", DIM, wt.extras, RESET));
+        let (wt_full, wt_compact) = repr::counter("wt", "wt", wt.extras, DIM);
+        full.push(' ');
+        full.push_str(&wt_full);
+        compact.push(' ');
+        compact.push_str(&wt_compact);
         if wt.stale > 0 {
             let stale_col = if wt.stale >= 5 { RED } else { YELLOW };
             full.push_str(&format!(" {}{}stale{}", stale_col, wt.stale, RESET));

@@ -14,6 +14,7 @@ mod input;
 mod layout;
 mod pace;
 mod render;
+mod repr;
 mod segments;
 mod transcript;
 mod width;

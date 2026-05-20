@@ -10,6 +10,28 @@
 //! All I/O (git, transcript, anthropic status, etc.) is precomputed in
 //! `RenderContext` so segments themselves never touch the filesystem or
 //! spawn subprocesses. That makes them trivially testable in isolation.
+//!
+//! # Representation conventions
+//!
+//! For consistency across the line, use `crate::repr` helpers when the
+//! segment matches one of the canonical shapes. The rules:
+//!
+//! | Shape         | Full mode        | Compact mode     | Helper                |
+//! |---------------|------------------|------------------|-----------------------|
+//! | Counter       | `label:N`        | `label_short:N`  | `repr::counter`       |
+//! | Percent       | `label N%`       | `label_short:N`  | `repr::percent`       |
+//! | Signed delta  | `label +N`       | `label_short:+N` | `repr::signed_delta`  |
+//! | Labeled state | `label:value`    | `label_s:val_s`  | `repr::labeled_status`|
+//!
+//! Inline (not a repr shape):
+//!   - Glyph-prefixed counts (●3, ↑5, #247) — the glyph IS the label.
+//!   - Atomic values (currency `$4.21`, durations `47m`, names, IDs).
+//!   - Multi-color compound assemblies (cost, capabilities).
+//!
+//! If your new segment fits a repr shape, USE the helper. The shape rules
+//! are enforced at the type level — there's no way to accidentally produce
+//! `rmN` (no separator) or `cache:84%` (wrong-mode separator) by calling
+//! `repr::counter` or `repr::percent`.
 
 pub mod anthropic;
 pub mod cache;

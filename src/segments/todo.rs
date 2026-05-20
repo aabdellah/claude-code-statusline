@@ -2,11 +2,12 @@
 //! working-tree diff. Only renders when the tree is dirty (clean tree
 //! ⇒ empty diff ⇒ zero delta ⇒ no signal worth showing).
 
-use crate::ansi::{DIM, GREEN, RESET, YELLOW};
+use crate::ansi::{DIM, GREEN, YELLOW};
 use crate::config;
 use crate::context::RenderContext;
 use crate::git;
 use crate::layout::{Priority, Seg};
+use crate::repr;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     if !ctx.in_repo || !ctx.git_status.dirty {
@@ -19,18 +20,10 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         return None;
     }
 
-    let sign = if delta > 0 {
-        format!("{}+{}{}", YELLOW, delta, RESET)
-    } else {
-        format!("{}{}{}", GREEN, delta, RESET)
-    };
-
-    Some(
-        Seg::new(
-            "todo",
-            Priority::Optional,
-            format!("{}todo{} {}", DIM, RESET, sign),
-        )
-        .with_compact(format!("{}t{}{}", DIM, RESET, sign)),
-    )
+    // Color the sign+number based on direction:
+    //   +N (more TODOs)   → yellow (you're accumulating debt)
+    //   -N (fewer TODOs)  → green  (you're paying it down)
+    let sign_color = if delta > 0 { YELLOW } else { GREEN };
+    let (full, compact) = repr::signed_delta("todo", "t", delta, DIM, sign_color);
+    Some(Seg::new("todo", Priority::Optional, full).with_compact(compact))
 }
