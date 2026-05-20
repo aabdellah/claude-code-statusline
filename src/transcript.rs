@@ -135,13 +135,24 @@ pub fn first_token_latency_ms(entries: &[Value]) -> Option<f64> {
     Some(ftl.max(0.0))
 }
 
-/// Counts nested subagent dispatches by walking `sourceToolAssistantUUID` of
-/// the most recent transcript entry. Depth 0 = main thread, 1 = inside a Task
-/// subagent, 2 = subagent that called another Task, etc.
+/// Counts nested subagent dispatches by walking `sourceToolAssistantUUID`
+/// of the ABSOLUTE-LATEST transcript entry. Depth 0 = main thread, 1 =
+/// inside a Task subagent, 2 = subagent that called another Task, etc.
+///
+/// Important: only the *truly* last entry is consulted. If a subagent
+/// finished earlier in the session and we're back in the main thread,
+/// the depth is 0 — not "still 1 because there's a sidechain entry in
+/// history." This is the difference between "are we yak-shaving right
+/// now?" and "did we ever yak-shave?".
 pub fn yak_depth(entries: &[Value]) -> u32 {
-    if entries.is_empty() { return 0; }
+    let Some(latest) = entries.last() else { return 0; };
 
-    // Build uuid → entry index once
+    // Short-circuit when the latest entry is plainly in the main thread.
+    if latest.get("sourceToolAssistantUUID").and_then(|v| v.as_str()).is_none() {
+        return 0;
+    }
+
+    // Build uuid → index once so the chain walk is O(N) instead of O(N²).
     let mut by_uuid: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         if let Some(u) = e.get("uuid").and_then(|v| v.as_str()) {
@@ -149,30 +160,23 @@ pub fn yak_depth(entries: &[Value]) -> u32 {
         }
     }
 
-    // Find latest entry with a sourceToolAssistantUUID link
-    for e in entries.iter().rev() {
-        let Some(_) = e.get("sourceToolAssistantUUID").and_then(|v| v.as_str()) else { continue; };
-
-        let mut depth = 0u32;
-        let mut current = e;
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        loop {
-            let src = current.get("sourceToolAssistantUUID").and_then(|v| v.as_str());
-            let Some(src) = src else { break; };
-            // Only insert when we have a real UUID — using "" as a sentinel
-            // would collide for ALL entries missing a uuid, causing the
-            // cycle detector to break the walk early on the second such
-            // entry (incorrectly capping depth).
-            if let Some(cur_uuid) = current.get("uuid").and_then(|v| v.as_str()) {
-                if !seen.insert(cur_uuid) { break; }
-            }
-            depth += 1;
-            let Some(&next_idx) = by_uuid.get(src) else { break; };
-            current = &entries[next_idx];
+    let mut depth = 0u32;
+    let mut current = latest;
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    loop {
+        let src = current.get("sourceToolAssistantUUID").and_then(|v| v.as_str());
+        let Some(src) = src else { break; };
+        // Only insert when we have a real UUID — using "" as a sentinel
+        // would collide for ALL entries missing a uuid, breaking the walk
+        // early on the second such entry (incorrectly capping depth).
+        if let Some(cur_uuid) = current.get("uuid").and_then(|v| v.as_str()) {
+            if !seen.insert(cur_uuid) { break; }
         }
-        return depth;
+        depth += 1;
+        let Some(&next_idx) = by_uuid.get(src) else { break; };
+        current = &entries[next_idx];
     }
-    0
+    depth
 }
 
 /// Counts Bash tool invocations that look destructive (rm, unlink, truncate,
@@ -248,6 +252,21 @@ mod tests {
             json!({"uuid": "leaf", "type": "assistant", "sourceToolAssistantUUID": "mid"}),
         ];
         assert_eq!(yak_depth(&entries), 2);
+    }
+
+    #[test]
+    fn yak_depth_zero_when_back_in_main_thread() {
+        // Regression: a subagent ran earlier in the session, then we
+        // returned to the main thread. The old buggy code would scan
+        // backwards through history, find the sidechain entry, and
+        // report depth 1 forever. The fix looks at the absolute-latest
+        // entry only — it's main-thread, so depth is 0.
+        let entries = vec![
+            json!({"uuid": "main1", "type": "assistant"}),
+            json!({"uuid": "sub1", "type": "assistant", "sourceToolAssistantUUID": "main1"}),
+            json!({"uuid": "main2", "type": "assistant"}),
+        ];
+        assert_eq!(yak_depth(&entries), 0);
     }
 
     #[test]
