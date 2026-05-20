@@ -18,52 +18,91 @@ faster than the first Rust cut that still used `git` subprocesses). Local
 git operations use libgit2 directly; only the anthropic status check
 involves any non-libgit2 file I/O.
 
-## Install (any Mac in under a minute)
+## Install (any machine in under a minute)
 
-Prereq: Rust must be available. If not yet installed:
+Prereq: Rust must be available. Platform-specific installers below; same
+behavior on all three.
 
-```bash
-brew install rust   # macOS
-```
-
-Then clone and run the installer:
+### macOS / Linux
 
 ```bash
 git clone git@github.com:aabdellah/claude-code-statusline.git
 cd claude-code-statusline
-./install.sh
+./install.sh                  # or: ./install.sh --with-autobuild
 ```
 
-That's it. The installer:
+Install Rust first if needed:
+```bash
+brew install rust                                    # macOS
+sudo apt install rustc cargo build-essential         # Debian/Ubuntu
+sudo dnf install rust cargo gcc                      # Fedora
+sudo pacman -S rust base-devel                       # Arch
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # any *nix
+```
 
-1. Builds the release binary (~30s on first build because libgit2 vendors itself)
-2. Symlinks `~/.claude/bin/cc-statusline` → the freshly-built binary
-3. Patches `~/.claude/settings.json` with the right `statusLine` block (preserves every other key — uses `python3` which is on macOS by default)
+### Windows (PowerShell)
+
+```powershell
+git clone git@github.com:aabdellah/claude-code-statusline.git
+cd claude-code-statusline
+.\install.ps1                 # or: .\install.ps1 -WithAutobuild
+```
+
+Install Rust first if needed:
+```powershell
+winget install Rustlang.Rustup
+```
+
+### What the installers do (identical across platforms)
+
+1. Build the release binary (~30s on first build — libgit2 vendors itself)
+2. Place the binary at the canonical hooks path on this OS
+3. Patch your `~/.claude/settings.json` (`%USERPROFILE%\.claude\settings.json`
+   on Windows) with the right `statusLine` block — preserves every other
+   key untouched
 
 Start a new Claude Code turn and the statusline will appear.
 
-### Optional flags
+### Auto-rebuild on source edits (optional)
+
+Each platform uses its native job-scheduling system, all running the same
+underlying `cargo watch` watcher:
+
+| Platform | `--with-autobuild` uses |
+|---|---|
+| macOS   | LaunchAgent (`~/Library/LaunchAgents/*.plist`) |
+| Linux   | systemd user unit (`~/.config/systemd/user/*.service`) |
+| Windows | Scheduled Task (visible in `taskschd.msc`) |
+
+### Updating
+
+Same idempotent path — re-run the installer after pulling new code:
 
 ```bash
-./install.sh --with-autobuild   # also install a LaunchAgent that rebuilds
-                                #   the binary on src/ edits (uses cargo-watch)
-./install.sh --uninstall        # remove the symlink + statusLine block + LaunchAgent
-./install.sh --help             # see options
+git pull && ./install.sh           # macOS / Linux
+git pull;  .\install.ps1           # Windows
 ```
 
-### Updating later
+### Uninstall
 
 ```bash
-git pull && ./install.sh
+./install.sh --uninstall           # macOS / Linux
+.\install.ps1 -Uninstall           # Windows
 ```
 
-The installer is idempotent — re-running it is the supported update path.
+Removes the symlink/copy, the statusLine block from settings.json (other
+keys preserved), and the auto-rebuild job if installed.
 
 ## Dependencies on the target machine
 
 - `git` (required for repo state — the binary shells out)
 - `curl` (optional — used for `status.claude.com` background fetch)
-- `python3` (used by the installer to patch settings.json; bundled with macOS)
+- macOS / Linux: `python3` (used by install.sh to patch settings.json safely;
+  bundled with macOS since 12.3, install via your distro's package manager
+  on Linux)
+- Windows: PowerShell 5.1+ (bundled with Windows 10/11)
+- Linux: a C compiler for the vendored libgit2 build (`gcc` /
+  `build-essential` / `base-devel` per distro)
 - *That's it.* No Node, no Python, no shared libraries beyond `libSystem`
   (macOS) / `glibc` (Linux).
 

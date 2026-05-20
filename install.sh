@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Install the claude-code-statusline on this machine.
 #
+# Supported: macOS (Darwin), Linux. Windows users: see install.ps1.
+#
 # Idempotent: safe to re-run to update an existing install.
 #
 # What it does:
@@ -11,6 +13,8 @@
 #
 # Optional add-on (auto-rebuild on source edits):
 #   ./install.sh --with-autobuild
+#     • macOS uses launchd (LaunchAgent)
+#     • Linux uses systemd user unit
 #
 # Uninstall:
 #   ./install.sh --uninstall
@@ -21,8 +25,26 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.claude/bin"
 SETTINGS="$HOME/.claude/settings.json"
 SYMLINK="$BIN_DIR/cc-statusline"
-LAUNCHAGENT_LABEL="dev.abdellah.cc-statusline-autobuild"
-LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/${LAUNCHAGENT_LABEL}.plist"
+
+# --- OS detection -----------------------------------------------------------
+OS="$(uname -s)"
+case "$OS" in
+  Darwin)
+    AUTOBUILD_TYPE="launchd"
+    LAUNCHAGENT_LABEL="dev.abdellah.cc-statusline-autobuild"
+    LAUNCHAGENT_PATH="$HOME/Library/LaunchAgents/${LAUNCHAGENT_LABEL}.plist"
+    ;;
+  Linux)
+    AUTOBUILD_TYPE="systemd"
+    SYSTEMD_UNIT_NAME="dev.abdellah.cc-statusline-autobuild.service"
+    SYSTEMD_UNIT_PATH="$HOME/.config/systemd/user/${SYSTEMD_UNIT_NAME}"
+    ;;
+  *)
+    echo "Unsupported OS: $OS (only Darwin / Linux supported in install.sh)" >&2
+    echo "Windows users: run install.ps1 from PowerShell instead." >&2
+    exit 1
+    ;;
+esac
 
 # --- Flags ------------------------------------------------------------------
 WITH_AUTOBUILD=0
@@ -43,11 +65,23 @@ done
 # --- Uninstall path ---------------------------------------------------------
 if [ "$DO_UNINSTALL" = "1" ]; then
   echo "==> Uninstalling..."
-  if [ -e "$LAUNCHAGENT_PATH" ]; then
-    launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
-    rm -f "$LAUNCHAGENT_PATH"
-    echo "  removed LaunchAgent"
-  fi
+  case "$AUTOBUILD_TYPE" in
+    launchd)
+      if [ -e "$LAUNCHAGENT_PATH" ]; then
+        launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
+        rm -f "$LAUNCHAGENT_PATH"
+        echo "  removed LaunchAgent"
+      fi
+      ;;
+    systemd)
+      if [ -e "$SYSTEMD_UNIT_PATH" ]; then
+        systemctl --user disable --now "$SYSTEMD_UNIT_NAME" 2>/dev/null || true
+        rm -f "$SYSTEMD_UNIT_PATH"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo "  removed systemd user unit"
+      fi
+      ;;
+  esac
   if [ -L "$SYMLINK" ] || [ -e "$SYMLINK" ]; then
     rm -f "$SYMLINK"
     echo "  removed symlink at $SYMLINK"
@@ -72,11 +106,17 @@ fi
 
 # --- Pre-flight -------------------------------------------------------------
 if ! command -v cargo >/dev/null; then
-  cat >&2 <<'MSG'
+  cat >&2 <<MSG
 Error: cargo not found.
 
 Install Rust first:
-  brew install rust                                             # easiest on macOS
+$(if [ "$OS" = "Darwin" ]; then
+  echo "  brew install rust                                             # easiest on macOS"
+elif [ "$OS" = "Linux" ]; then
+  echo "  # Debian/Ubuntu:  sudo apt install rustc cargo"
+  echo "  # Fedora:         sudo dnf install rust cargo"
+  echo "  # Arch:           sudo pacman -S rust"
+fi)
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # cross-platform
 
 Then re-run this script.
@@ -86,8 +126,20 @@ fi
 
 if ! command -v python3 >/dev/null; then
   echo "Error: python3 not found (used to patch settings.json)" >&2
-  echo "macOS bundles python3 since 12.3; install Xcode CLT or 'brew install python'" >&2
+  case "$OS" in
+    Darwin) echo "  → bundled with macOS 12.3+, or 'brew install python'" >&2 ;;
+    Linux)  echo "  → install via your distro: apt install python3 / dnf install python3 / pacman -S python" >&2 ;;
+  esac
   exit 1
+fi
+
+# On Linux, libgit2 vendored needs a C compiler — sanity-check.
+if [ "$OS" = "Linux" ] && ! command -v cc >/dev/null && ! command -v gcc >/dev/null; then
+  echo "Warning: no C compiler found (cc / gcc). The vendored libgit2 build will fail."
+  echo "  Debian/Ubuntu: sudo apt install build-essential"
+  echo "  Fedora:        sudo dnf groupinstall 'Development Tools'"
+  echo "  Arch:          sudo pacman -S base-devel"
+  echo "Proceeding anyway in case you have an alternative toolchain."
 fi
 
 # --- Build ------------------------------------------------------------------
@@ -124,7 +176,7 @@ with open(p, "w") as f:
 print(f"==> Patched   {p}")
 PYEOF
 
-# --- Optional: LaunchAgent for auto-rebuild on source edits -----------------
+# --- Optional: auto-rebuild on source edits ---------------------------------
 if [ "$WITH_AUTOBUILD" = "1" ]; then
   if ! command -v cargo-watch >/dev/null && [ ! -x "$HOME/.cargo/bin/cargo-watch" ]; then
     echo "==> Installing cargo-watch (one-time, ~3min)..."
@@ -135,8 +187,10 @@ if [ "$WITH_AUTOBUILD" = "1" ]; then
     CARGO_WATCH_BIN="$(command -v cargo-watch)"
   fi
 
-  mkdir -p "$(dirname "$LAUNCHAGENT_PATH")"
-  cat > "$LAUNCHAGENT_PATH" <<XML
+  case "$AUTOBUILD_TYPE" in
+    launchd)
+      mkdir -p "$(dirname "$LAUNCHAGENT_PATH")"
+      cat > "$LAUNCHAGENT_PATH" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -175,9 +229,37 @@ if [ "$WITH_AUTOBUILD" = "1" ]; then
 </dict>
 </plist>
 XML
-  launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
-  launchctl load "$LAUNCHAGENT_PATH"
-  echo "==> LaunchAgent loaded  ($LAUNCHAGENT_LABEL)"
+      launchctl unload "$LAUNCHAGENT_PATH" 2>/dev/null || true
+      launchctl load "$LAUNCHAGENT_PATH"
+      echo "==> LaunchAgent loaded  ($LAUNCHAGENT_LABEL)"
+      ;;
+
+    systemd)
+      mkdir -p "$(dirname "$SYSTEMD_UNIT_PATH")"
+      cat > "$SYSTEMD_UNIT_PATH" <<UNIT
+[Unit]
+Description=Claude Code statusline auto-rebuild
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=${CARGO_WATCH_BIN} -x "build --release" -w src -w Cargo.toml
+WorkingDirectory=${REPO_DIR}
+Environment=PATH=${HOME}/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=${HOME}
+Restart=always
+RestartSec=10
+StandardOutput=append:/tmp/cc-statusline-autobuild.log
+StandardError=append:/tmp/cc-statusline-autobuild.err
+
+[Install]
+WantedBy=default.target
+UNIT
+      systemctl --user daemon-reload
+      systemctl --user enable --now "$SYSTEMD_UNIT_NAME"
+      echo "==> systemd user unit loaded  ($SYSTEMD_UNIT_NAME)"
+      ;;
+  esac
   echo "    cargo-watch runs in the background; binary rebuilds on src/ or Cargo.toml edits."
 fi
 
