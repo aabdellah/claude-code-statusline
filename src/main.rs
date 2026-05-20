@@ -10,6 +10,7 @@ mod config;
 mod format;
 mod git;
 mod input;
+mod layout;
 mod pace;
 mod render;
 mod transcript;

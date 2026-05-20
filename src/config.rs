@@ -9,8 +9,12 @@ use std::env;
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// Render mode — auto picks compact below a width threshold or when the full
-/// line would overflow the terminal.
+/// Render mode.
+/// - `Auto` (default): adaptive layout. The fitter starts from FULL variants
+///   and downgrades lowest-priority segments to compact/micro/dropped until
+///   the line fits the detected terminal width. See `layout.rs`.
+/// - `Full`: force every segment to its FULL variant regardless of width.
+/// - `Compact`: force every segment to its smallest available variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Auto,
@@ -32,7 +36,6 @@ impl Mode {
 pub struct Config {
     pub mode: Mode,
     pub hidden: HashSet<String>,
-    pub compact_below: u16,
     pub width_override: Option<u16>,
     pub debug_timing: bool,
     pub debug_width: bool,
@@ -48,11 +51,6 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let compact_below = env::var("STATUSLINE_COMPACT_BELOW")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(140);
-
         let width_override = env::var("STATUSLINE_WIDTH")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -61,7 +59,6 @@ impl Config {
         Self {
             mode: Mode::from_env(),
             hidden,
-            compact_below,
             width_override,
             debug_timing: env::var("STATUSLINE_DEBUG_TIMING").as_deref() == Ok("1"),
             debug_width: env::var("STATUSLINE_DEBUG_WIDTH").as_deref() == Ok("1"),

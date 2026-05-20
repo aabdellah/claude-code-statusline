@@ -1,13 +1,17 @@
-//! Segment assembly + mode selection.
+//! Segment assembly + layout-aware fitting.
 //!
-//! Layout (full):
+//! Layout (at full width):
 //!   model · repo/branch +flags+stash ↑↓ [wt←origin] wt:N #PR · todo Δ ·
 //!   ctx % [gradient bar] · ⚡effort 🧠 · ◆style · 5h N% · cache N% ttl m:ss ·
 //!   $X $Y/h +A/-B · Nt/s · dur
 //!
 //! Every segment is gated on data presence — nothing renders without a real
 //! value. Red-signal events (high ctx, behind ≥3, max effort, etc.) accumulate
-//! into `red_signals`; 3+ triggers a CRIT banner + red separator tint.
+//! into `red_signals`; 3+ triggers a CRIT banner.
+//!
+//! Width handling is delegated to `layout::SegmentBag` which fits the rendered
+//! segments to the terminal width by downgrading lowest-priority segments to
+//! their compact/micro variants or dropping them entirely. See `layout.rs`.
 
 use std::path::Path;
 
@@ -16,6 +20,7 @@ use crate::config::{self, Config, Mode};
 use crate::format::{self, *};
 use crate::git;
 use crate::input::StatusInput;
+use crate::layout::{Priority, Seg, SegmentBag};
 use crate::pace;
 use crate::transcript;
 use crate::width;
@@ -24,51 +29,23 @@ use crate::{anthropic, ansi as ansi_mod};
 pub struct RenderOutput {
     pub line: String,
     pub term_width: Option<u16>,
-    pub use_compact: bool,
-}
-
-/// Collects rendered segments and the red-signal count in a single pass.
-struct SegmentBag<'a> {
-    full: Vec<String>,
-    compact: Vec<String>,
-    red_signals: u32,
-    cfg: &'a Config,
-}
-
-impl<'a> SegmentBag<'a> {
-    fn new(cfg: &'a Config) -> Self {
-        Self {
-            full: Vec::with_capacity(16),
-            compact: Vec::with_capacity(16),
-            red_signals: 0,
-            cfg,
-        }
-    }
-
-    /// Mirror of Node's `S()`. Pushes the segment to both full+compact arrays,
-    /// honoring STATUSLINE_HIDE.
-    fn push(&mut self, id: &str, full: String, compact: Option<String>, is_red: bool) {
-        if self.cfg.is_hidden(id) { return; }
-        let compact_str = compact.unwrap_or_else(|| full.clone());
-        self.full.push(full);
-        self.compact.push(compact_str);
-        if is_red { self.red_signals += 1; }
-    }
+    /// Variant chosen counts: (full, compact, micro, dropped).
+    pub variant_counts: (u32, u32, u32, u32),
 }
 
 pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
     config::reset_timings();
     let mut bag = SegmentBag::new(cfg);
 
-    // 1. Model
-    bag.push(
+    // 1. Model — CRITICAL (always visible)
+    bag.push(Seg::new(
         "model",
+        Priority::Critical,
         format!("{}{}{}", CYAN, short_model_name(input.model.as_ref()), RESET),
-        Some(format!("{}{}{}", CYAN, short_model_compact(input.model.as_ref()), RESET)),
-        false,
-    );
+    )
+    .with_compact(format!("{}{}{}", CYAN, short_model_compact(input.model.as_ref()), RESET)));
 
-    // 2. Anthropic status (only when degraded)
+    // 2. Anthropic status (only when degraded) — IMPORTANT
     let a_status = config::timed("anthropic-status", cfg.debug_timing, anthropic::anthropic_status);
     if let Some(s) = a_status.as_deref() {
         let col = match s {
@@ -77,15 +54,17 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             _ => ansi::YELLOW.to_string(),
         };
         let is_red = s != "minor";
-        bag.push(
+        let mut seg = Seg::new(
             "anthropic",
+            Priority::Important,
             format!("{}anthropic:{}{}", col, s, RESET),
-            Some(format!("{}anth:{}{}", col, &s[..s.len().min(3)], RESET)),
-            is_red,
-        );
+        )
+        .with_compact(format!("{}anth:{}{}", col, &s[..s.len().min(3)], RESET));
+        if is_red { seg = seg.red(); }
+        bag.push(seg);
     }
 
-    // 3. Repo / branch / git state / worktree / PR
+    // 3. Repo / branch / git state / worktree / PR — IMPORTANT
     let cwd_str = input.workspace.as_ref().and_then(|w| w.current_dir.as_deref())
         .or(input.cwd.as_deref())
         .map(String::from)
@@ -99,7 +78,6 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         .and_then(|r| r.name.as_deref());
 
     // Filesystem fast path: find .git/ once, read branch from HEAD directly.
-    // Avoids ~25ms of git-symbolic-ref + git-rev-parse subprocess overhead.
     let gitdir = config::timed("gitdir-discover", cfg.debug_timing, || git::find_gitdir(cwd));
     let branch = input.worktree.as_ref().and_then(|w| w.branch.clone())
         .or_else(|| gitdir.as_deref().and_then(git::branch_or_sha_from_head));
@@ -118,9 +96,6 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         let repo: String = repo_from_schema.map(String::from).unwrap_or_else(||
             cwd.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
         );
-
-        // Each libgit2 call is sub-millisecond; sequential is faster than
-        // threaded because we'd spend more on spawn overhead than we'd save.
         let status = config::timed("git-status", cfg.debug_timing, || git::git_status(cwd));
         let wt = config::timed("worktree-stats", cfg.debug_timing, || git::worktree_stats(cwd));
 
@@ -132,8 +107,11 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
 
         let mut full = format!("{}{}{}/{}", BOLD, repo, RESET, branch_seg);
         let mut compact = format!("{}{}{}/{}", BOLD, compact_repo_name(&repo), RESET, branch_seg);
+        // Micro: just the branch (no repo name at all). The model+branch combo
+        // is enough to know where you are.
+        let mut micro = branch_seg.clone();
 
-        // Flags
+        // Flags — append to all three variants (they're a tiny visual cue)
         let mut flags = String::new();
         if status.staged > 0 {
             flags.push_str(&format!("{}●{}{}", ansi::GREEN, status.staged, RESET));
@@ -150,8 +128,10 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         if !flags.is_empty() {
             full.push(' '); full.push_str(&flags);
             compact.push(' '); compact.push_str(&flags);
+            micro.push_str(&flags);
         }
 
+        let mut counted_behind_red = false;
         if status.ahead > 0 {
             let s = format!(" {}↑{}{}", ansi::GREEN, status.ahead, RESET);
             full.push_str(&s); compact.push_str(&s);
@@ -159,8 +139,7 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         if status.behind > 0 {
             let s = format!(" {}↓{}{}", RED, status.behind, RESET);
             full.push_str(&s); compact.push_str(&s);
-            // ≥3 behind escalates to red-signal; 1-2 behind is normal noise.
-            if status.behind >= 3 { bag.red_signals += 1; }
+            if status.behind >= 3 { counted_behind_red = true; }
         }
 
         if in_worktree {
@@ -168,6 +147,7 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             let origin_str = origin.map(|o| format!(" ←{}", o)).unwrap_or_default();
             full.push_str(&format!(" {}[wt{}]{}", DIM, origin_str, RESET));
         }
+        let mut wt_stale_red = false;
         if wt.extras > 0 {
             full.push_str(&format!(" {}wt:{}{}", DIM, wt.extras, RESET));
             compact.push_str(&format!(" {}wt:{}{}", DIM, wt.extras, RESET));
@@ -175,10 +155,11 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                 let stale_col = if wt.stale >= 5 { RED } else { ansi::YELLOW };
                 full.push_str(&format!(" {}{}stale{}", stale_col, wt.stale, RESET));
                 compact.push_str(&format!("{}/{}s{}", stale_col, wt.stale, RESET));
-                if wt.stale >= 5 { bag.red_signals += 1; }
+                if wt.stale >= 5 { wt_stale_red = true; }
             }
         }
 
+        let mut pr_red = false;
         if let Some(pr) = input.pr.as_ref() {
             if let Some(num) = pr.number {
                 let pr_state = pr.review_state.as_deref();
@@ -189,30 +170,34 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                 };
                 let s = format!(" {}#{}{}", pr_color, num, RESET);
                 full.push_str(&s); compact.push_str(&s);
-                if pr_state == Some("CHANGES_REQUESTED") { bag.red_signals += 1; }
+                if pr_state == Some("CHANGES_REQUESTED") { pr_red = true; }
             }
         }
 
-        bag.push("repo", full, Some(compact), false);
+        let mut repo_seg = Seg::new("repo", Priority::Important, full)
+            .with_compact(compact)
+            .with_micro(micro);
+        if counted_behind_red || wt_stale_red || pr_red { repo_seg = repo_seg.red(); }
+        bag.push(repo_seg);
 
-        // 4. Destruction counter
+        // 4. Destruction counter — OPTIONAL (only renders when >0)
         let destroyed = config::timed("destruction", cfg.debug_timing,
             || transcript::destruction_count(&transcript_entries));
         if destroyed > 0 {
             let d_col: String = if destroyed >= 6 { format!("{}{}", BOLD, RED) }
                                 else if destroyed >= 3 { RED.to_string() }
                                 else { ansi::YELLOW.to_string() };
-            bag.push(
+            let mut seg = Seg::new(
                 "destruction",
+                Priority::Optional,
                 format!("{}rm:{}{}", d_col, destroyed, RESET),
-                Some(format!("{}rm{}{}", d_col, destroyed, RESET)),
-                destroyed >= 3,
-            );
+            )
+            .with_compact(format!("{}rm{}{}", d_col, destroyed, RESET));
+            if destroyed >= 3 { seg = seg.red(); }
+            bag.push(seg);
         }
 
-        // 5. TODO/FIXME delta — skip on clean tree (diff would be empty anyway).
-        // With libgit2 the call is already sub-ms, but the skip is still
-        // marginally cheaper and matches Node-version behavior.
+        // 5. TODO/FIXME delta — OPTIONAL
         let t_delta = if status.dirty {
             config::timed("todo-delta", cfg.debug_timing, || git::todo_delta(cwd))
         } else { 0 };
@@ -223,41 +208,45 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                 format!("{}{}{}", ansi::GREEN, t_delta, RESET)
             };
             bag.push(
-                "todo",
-                format!("{}todo{} {}", DIM, RESET, sign),
-                Some(format!("{}t{}{}", DIM, RESET, sign)),
-                false,
+                Seg::new("todo", Priority::Optional, format!("{}todo{} {}", DIM, RESET, sign))
+                    .with_compact(format!("{}t{}{}", DIM, RESET, sign)),
             );
         }
     } else {
         let dir_name = cwd.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        bag.push("repo", format!("{}{}{}", DIM, dir_name, RESET), None, false);
+        bag.push(Seg::new(
+            "repo",
+            Priority::Important,
+            format!("{}{}{}", DIM, dir_name, RESET),
+        ));
     }
 
-    // 6. cwd-drift
+    // 6. cwd-drift — OPTIONAL
     if !in_worktree {
         if let Some(pd) = project_dir {
             let pd_path = Path::new(pd);
             if pd_path != cwd && !cwd.starts_with(pd_path) {
-                bag.push("cwd-drift", format!("{}cwd≠proj{}", ansi::YELLOW, RESET), None, false);
+                bag.push(Seg::new(
+                    "cwd-drift",
+                    Priority::Optional,
+                    format!("{}cwd≠proj{}", ansi::YELLOW, RESET),
+                ));
             }
         }
     }
 
-    // 7. Yak shave depth
+    // 7. Yak shave depth — OPTIONAL
     let yak = config::timed("yak-depth", cfg.debug_timing,
         || transcript::yak_depth(&transcript_entries));
     if let Some(yak_str) = yak_indicator(yak) {
         let yak_col = yak_color(yak);
-        bag.push(
-            "yak",
-            format!("{}{}{}", yak_col, yak_str, RESET),
-            Some(format!("{}y:{}{}", yak_col, yak, RESET)),
-            yak >= 4,
-        );
+        let mut seg = Seg::new("yak", Priority::Optional, format!("{}{}{}", yak_col, yak_str, RESET))
+            .with_compact(format!("{}y:{}{}", yak_col, yak, RESET));
+        if yak >= 4 { seg = seg.red(); }
+        bag.push(seg);
     }
 
-    // 8. Context meter
+    // 8. Context meter — CRITICAL (always visible)
     if let Some(cw) = input.context_window.as_ref() {
         let used_pct: Option<f64> = cw.used_percentage
             .or_else(|| cw.remaining_percentage.map(|r| 100.0 - r));
@@ -266,28 +255,35 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             let bar = ansi_mod::gradient_bar(used_pct, 10);
             let size = cw.context_window_size.unwrap_or_else(|| cw.total_tokens.unwrap_or(0));
             let size_str = fmt_ctx_size(size);
+            let exceeds = cw.exceeds_200k_tokens.unwrap_or(false);
+
             let head = format!("ctx {}%", used_pct.round() as i64);
             let mut full = format!("{} {}", ansi_mod::grad_text(&head, t), bar);
             if !size_str.is_empty() {
                 full.push_str(&format!(" {}{}{}", DIM, size_str, RESET));
             }
-            let exceeds = cw.exceeds_200k_tokens.unwrap_or(false);
-            let compact = ansi_mod::grad_text(&compact_context_str(used_pct, size, exceeds), t);
-
             if exceeds {
                 full.push_str(&format!(" {}{}200k+{}", RED, BOLD, RESET));
-                bag.red_signals += 1;
             }
-            bag.push("context", full, Some(compact), false);
+            let compact = ansi_mod::grad_text(&compact_context_str(used_pct, size, exceeds), t);
+            // Micro: just "78%" — no size, no bar. Last resort for very narrow widths.
+            let micro = ansi_mod::grad_text(&format!("{}%", used_pct.round() as i64), t);
+
+            let mut seg = Seg::new("context", Priority::Critical, full)
+                .with_compact(compact)
+                .with_micro(micro);
+            if exceeds { seg = seg.red(); }
+            bag.push(seg);
             if used_pct >= 85.0 { bag.red_signals += 1; }
         }
     }
 
-    // 9. Effort + thinking + fast (one group)
+    // 9. Effort + thinking + fast — IMPORTANT
     {
         let mut full_bits: Vec<String> = Vec::new();
         let mut compact_bits: Vec<String> = Vec::new();
-        let mut red = 0u32;
+        let mut micro_bits: Vec<String> = Vec::new();
+        let mut is_red = false;
         if let Some(lvl) = input.effort.as_ref().and_then(|e| e.level.as_deref()) {
             let col: String = match lvl {
                 "max" => format!("{}{}", BOLD, RED),
@@ -296,25 +292,33 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                 "medium" => ansi::GREEN.to_string(),
                 _ => DIM.to_string(),
             };
+            // Micro: first 3 chars of the level name. "medium" → "med", "high" → "hig".
+            let micro_lvl: String = lvl.chars().take(3).collect();
             full_bits.push(format!("{}{}{}", col, lvl, RESET));
             compact_bits.push(format!("{}{}{}", col, lvl, RESET));
-            if lvl == "max" || lvl == "xhigh" { red += 1; }
+            micro_bits.push(format!("{}{}{}", col, micro_lvl, RESET));
+            if lvl == "max" || lvl == "xhigh" { is_red = true; }
         }
         if input.thinking.as_ref().and_then(|t| t.enabled).unwrap_or(false) {
             full_bits.push(format!("{}{}thinking{}", ansi::ITALIC, ansi::VIOLET, RESET));
             compact_bits.push(format!("{}{}T{}", ansi::ITALIC, ansi::VIOLET, RESET));
+            micro_bits.push(format!("{}{}T{}", ansi::ITALIC, ansi::VIOLET, RESET));
         }
         if input.fast_mode.unwrap_or(false) {
             full_bits.push(format!("{}{}fast{}", BOLD, ansi::BRIGHT_MAGENTA, RESET));
             compact_bits.push(format!("{}{}F{}", BOLD, ansi::BRIGHT_MAGENTA, RESET));
+            micro_bits.push(format!("{}{}F{}", BOLD, ansi::BRIGHT_MAGENTA, RESET));
         }
         if !full_bits.is_empty() {
-            bag.push("capabilities", full_bits.join(" "), Some(compact_bits.join("")), false);
-            bag.red_signals += red;
+            let mut seg = Seg::new("capabilities", Priority::Important, full_bits.join(" "))
+                .with_compact(compact_bits.join(""))
+                .with_micro(micro_bits.join(""));
+            if is_red { seg = seg.red(); }
+            bag.push(seg);
         }
     }
 
-    // 10. Output style (native + opt-in plugin styles)
+    // 10. Output style — OPTIONAL (background metadata, drop first under pressure)
     {
         use std::collections::BTreeSet;
         let mut styles: BTreeSet<String> = BTreeSet::new();
@@ -330,15 +334,18 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                 .map(|s| s.chars().take(5).collect::<String>())
                 .collect();
             let compact = format!("{}{}{}", ansi::AMBER, compact_joined.join("+"), RESET);
-            bag.push("output-style", full, Some(compact), false);
+            bag.push(
+                Seg::new("output-style", Priority::Optional, full)
+                    .with_compact(compact),
+            );
         }
     }
 
-    // 11. Rate limits
+    // 11. Rate limits — NORMAL
     {
         let mut full_bits: Vec<String> = Vec::new();
         let mut compact_bits: Vec<String> = Vec::new();
-        let mut red = 0u32;
+        let mut is_red = false;
         if let Some(rl) = input.rate_limits.as_ref() {
             if let Some(fh) = rl.five_hour.as_ref() {
                 if let Some(p) = fh.used_percentage {
@@ -352,7 +359,7 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                     }
                     full_bits.push(s);
                     compact_bits.push(format!("{}5h:{}{}", col, p.round() as i64, RESET));
-                    if p >= 90.0 { red += 1; }
+                    if p >= 90.0 { is_red = true; }
                 }
             }
             if let Some(sd) = rl.seven_day.as_ref() {
@@ -364,21 +371,23 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
                         let pcol = pace::pace_color(projected, frac);
                         full.push_str(&format!(" {}→{}%{}", pcol, projected.round() as i64, RESET));
                         compact.push_str(&format!("{}/{}{}", pcol, projected.round() as i64, RESET));
-                        if projected > 115.0 || (projected < 80.0 && frac >= 0.70) { red += 1; }
+                        if projected > 115.0 || (projected < 80.0 && frac >= 0.70) { is_red = true; }
                     }
-                    if pace_obj.used_pct >= 90.0 { red += 1; }
+                    if pace_obj.used_pct >= 90.0 { is_red = true; }
                     full_bits.push(full);
                     compact_bits.push(compact);
                 }
             }
         }
         if !full_bits.is_empty() {
-            bag.push("rate-limits", full_bits.join(" "), Some(compact_bits.join(" ")), false);
-            bag.red_signals += red;
+            let mut seg = Seg::new("rate-limits", Priority::Normal, full_bits.join(" "))
+                .with_compact(compact_bits.join(" "));
+            if is_red { seg = seg.red(); }
+            bag.push(seg);
         }
     }
 
-    // 12. Cache hit % + TTL countdown
+    // 12. Cache hit % + TTL countdown — NORMAL
     {
         let usage = input.context_window.as_ref().and_then(|cw| cw.current_usage.as_ref());
         let cache_read = usage.and_then(|u| u.cache_read_input_tokens).unwrap_or(0);
@@ -405,15 +414,14 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             }
         }
         if !full_bits.is_empty() {
-            bag.push("cache", full_bits.join(" "), Some(compact_bits.join(" ")), false);
+            bag.push(
+                Seg::new("cache", Priority::Normal, full_bits.join(" "))
+                    .with_compact(compact_bits.join(" ")),
+            );
         }
     }
 
-    // 13. Cost + burn rate + lines + $/LOC + mileage
-    //
-    // Important: formatters must only be called when the source field is
-    // PRESENT — not just `unwrap_or(0.0)`-defaulted. Node's `typeof x === 'number'`
-    // checks distinguish missing-vs-zero; we replicate that with Option here.
+    // 13. Cost + burn rate + lines + $/LOC + mileage — IMPORTANT
     {
         let cost = input.cost.as_ref();
         let usd_opt = cost.and_then(|c| c.total_cost_usd);
@@ -452,19 +460,22 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             compact_bits.push(format!("{}+{}{}{}/{}{}-{}{}",
                 ansi::GREEN, fmt_lines_compact(added), RESET, DIM, RESET, RED, fmt_lines_compact(removed), RESET));
         }
-        // $/LOC + mileage only in full mode — nice-to-have meta.
-        if let Some(p) = per_loc {
-            full_bits.push(format!("{}{}{}", DIM, p, RESET));
-        }
-        if let Some(m) = mileage {
-            full_bits.push(format!("{}{}{}", DIM, m, RESET));
-        }
+        if let Some(p) = per_loc { full_bits.push(format!("{}{}{}", DIM, p, RESET)); }
+        if let Some(m) = mileage { full_bits.push(format!("{}{}{}", DIM, m, RESET)); }
+
         if !full_bits.is_empty() {
-            bag.push("cost", full_bits.join(" "), Some(compact_bits.join(" ")), false);
+            // Micro: just the total cost — the one number that captures "how
+            // much this session has cost me." Everything else falls away.
+            let micro = money.as_ref().or(money_c.as_ref())
+                .map(|m| format!("{}{}{}", DIM, m, RESET));
+            let mut seg = Seg::new("cost", Priority::Important, full_bits.join(" "))
+                .with_compact(compact_bits.join(" "));
+            if let Some(m) = micro { seg = seg.with_micro(m); }
+            bag.push(seg);
         }
     }
 
-    // 14. Output tok/s + FTL approximation
+    // 14. Output tok/s + FTL approximation — OPTIONAL
     {
         let tok_rate_str = transcript::last_turn_output_rate(&transcript_entries)
             .and_then(fmt_tok_rate);
@@ -478,7 +489,6 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             compact_bits.push(format!("{}{}{}", DIM, s.replace("t/s", ""), RESET));
         }
         if let Some(s) = ftl_str.as_ref() {
-            // Parse leading number for color decision
             let seconds: i64 = s.chars()
                 .skip_while(|c| !c.is_ascii_digit())
                 .take_while(|c| c.is_ascii_digit())
@@ -490,62 +500,50 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
             compact_bits.push(format!("{}{}{}", ftl_col, s.replace("ftl ", "f"), RESET));
         }
         if !full_bits.is_empty() {
-            bag.push("perf", full_bits.join(" "), Some(compact_bits.join(" ")), false);
+            bag.push(
+                Seg::new("perf", Priority::Optional, full_bits.join(" "))
+                    .with_compact(compact_bits.join(" ")),
+            );
         }
     }
 
-    // 15. Session duration
+    // 15. Session duration — NORMAL
     {
         let dur_ms = input.cost.as_ref().and_then(|c| c.total_duration_ms).unwrap_or(0);
         if let Some(dur) = fmt_duration(dur_ms) {
             let dur_c = fmt_duration_compact(dur_ms);
-            bag.push("duration",
-                format!("{}{}{}", DIM, dur, RESET),
-                Some(format!("{}{}{}", DIM, dur_c.as_deref().unwrap_or(dur.as_str()), RESET)),
-                false);
+            bag.push(
+                Seg::new("duration", Priority::Normal, format!("{}{}{}", DIM, dur, RESET))
+                    .with_compact(format!("{}{}{}", DIM, dur_c.as_deref().unwrap_or(dur.as_str()), RESET)),
+            );
         }
     }
 
-    // --- Mode selection + render --------------------------------------------
+    // --- Fit + render --------------------------------------------------------
     let term_width = config::timed("width-detect", cfg.debug_timing, || width::detect_term_width(cfg));
     let full_sep = format!(" {}·{} ", DIM, RESET);
-    let compact_sep = ' ';
-    let full_line = bag.full.join(&full_sep);
 
-    let use_compact = match cfg.mode {
-        Mode::Compact => true,
-        Mode::Full => false,
-        Mode::Auto => {
-            let visible = ansi_mod::visible_length(&full_line);
-            let too_wide = term_width.map(|w| visible > w as usize).unwrap_or(false);
-            let narrow = term_width.map(|w| w < cfg.compact_below).unwrap_or(false);
-            too_wide || narrow
-        }
-    };
+    // CRIT banner consumes width too — subtract it from the budget before fitting.
+    let crit_active = bag.red_signals >= 3;
+    let crit_prefix = format!("{}{}CRIT{}{}", BOLD, RED, bag.red_signals, RESET);
+    let crit_prefix_visible = ansi_mod::visible_length(&crit_prefix) + ansi_mod::visible_length(&full_sep);
+    let effective_width = term_width.map(|w| {
+        if crit_active { w.saturating_sub(crit_prefix_visible as u16) } else { w }
+    });
 
-    let mut chosen = if use_compact {
-        bag.compact.join(&compact_sep.to_string())
-    } else {
-        full_line
-    };
+    let fit = bag.fit(effective_width, &full_sep);
 
-    // CRIT prefix: in full mode, recolor separators red too for full-line tint;
-    // in compact mode, just prepend the marker.
-    if bag.red_signals >= 3 {
-        let prefix = format!("{}{}CRIT{}{}", BOLD, RED, bag.red_signals, RESET);
-        if use_compact {
-            chosen = format!("{}{}{}", prefix, compact_sep, chosen);
-        } else {
-            let red_sep = format!(" {}·{} ", RED, RESET);
-            chosen = chosen.replace(&full_sep, &red_sep);
-            chosen = format!("{}{}{}", prefix, red_sep, chosen);
-        }
+    let mut chosen = fit.line;
+    if crit_active {
+        let red_sep = format!(" {}·{} ", RED, RESET);
+        chosen = chosen.replace(&full_sep, &red_sep);
+        chosen = format!("{}{}{}", crit_prefix, red_sep, chosen);
     }
 
     RenderOutput {
         line: chosen,
         term_width,
-        use_compact,
+        variant_counts: (fit.full_count, fit.compact_count, fit.micro_count, fit.dropped_count),
     }
 }
 
@@ -602,7 +600,10 @@ pub fn flush_debug_timing(cfg: &Config, out: &RenderOutput) {
     let width_info = out.term_width.map(|w| format!("{}cols", w))
         .unwrap_or_else(|| "width:unknown".into());
     let mode_info = match cfg.mode {
-        Mode::Auto => format!("auto→{}", if out.use_compact { "compact" } else { "full" }),
+        Mode::Auto => {
+            let (f, c, m, d) = out.variant_counts;
+            format!("auto[full:{} cpct:{} micro:{} drop:{}]", f, c, m, d)
+        }
         Mode::Full => "full".to_string(),
         Mode::Compact => "compact".to_string(),
     };

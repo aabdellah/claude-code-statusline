@@ -67,8 +67,7 @@ Restart Claude Code (or just start a new turn — settings reload between turns)
 | `STATUSLINE_SHOW_PLUGINS=1` | Show `learning+explanatory` plugin styles |
 | `STATUSLINE_NO_BLINK=1` | Disable boss-fight blink at ≥90% context |
 | `STATUSLINE_HIDE=mileage,perf,duration` | Suppress specific segments |
-| `STATUSLINE_MODE=auto\|full\|compact` | Force compact/full layout |
-| `STATUSLINE_COMPACT_BELOW=140` | Width threshold for auto-compact |
+| `STATUSLINE_MODE=auto\|full\|compact` | `auto` (default) = adaptive layout; `full` = every segment at full text; `compact` = every segment at smallest variant |
 | `STATUSLINE_WIDTH=N` | Force terminal width (for testing) |
 | `STATUSLINE_DEBUG_WIDTH=1` | Persist width-detection trace to `/tmp` |
 
@@ -83,14 +82,39 @@ claude-code-statusline/
 │   ├── config.rs          # env-var Config + per-render timing instrumentation
 │   ├── input.rs           # typed serde structs for the CC JSON input
 │   ├── format.rs          # null-safe value formatters (full + compact)
-│   ├── git.rs             # git status, todo Δ, worktree stats
+│   ├── git.rs             # git status, todo Δ, worktree stats (libgit2)
 │   ├── transcript.rs      # JSONL tail reader + derived metrics
 │   ├── anthropic.rs       # status.claude.com check (cached + bg refresh)
 │   ├── pace.rs            # 7-day rate-limit pace projection
 │   ├── width.rs           # terminal-width detection (8 layered fallbacks)
-│   └── render.rs          # segment assembly + mode selection
+│   ├── layout.rs          # priority-tiered adaptive fit (full/compact/micro/drop)
+│   └── render.rs          # segment assembly
 └── docs/
     └── ROADMAP.md         # shipped segments + backlog + rejected ideas
+```
+
+## Layout-aware rendering
+
+Every segment declares a **priority** and 1-3 **variants** (full → compact → micro).
+At render time, the fitter starts from FULL and downgrades the lowest-priority
+segments until the line fits the detected terminal width.
+
+| Tier | Segments | Behavior |
+|---|---|---|
+| Critical | `model`, `context`, CRIT banner | Never drops; can only downgrade variants |
+| Important | `repo/branch`, `cost`, `capabilities`, `anthropic-status` | Drops last |
+| Normal | `rate-limits`, `cache`, `duration` | Drops in tight layouts |
+| Optional | `yak`, `todo`, `pr`, `wt`, `perf`, `output-style`, `cwd-drift`, `destruction` | Drops first |
+
+Example degradation for a session in a git repo with cost data:
+
+```
+width=220 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · 5h 64% 7d 71% · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=130 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=100 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · $4.2 $5.4/h +247/-89
+width=80  → Opus 4.7 · claude/main ○3+1 · ctx 78% ████████░░ 1m · medium · $4.21
+width=60  → Opus 4.7 · main ○3+1 · 78%/1m · medium · $4.21
+width=40  → Opus 4.7 · 78%/1m · $4.21
 ```
 
 ## Conventions
