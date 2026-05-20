@@ -11,10 +11,12 @@ ctx 78% ████████░░ 1m · xhigh thinking · 5h 64%→1h12m 7d
 cache 84% ttl 2:47 · $4.21 $12.4/h +247/-89 $0.017/LOC mpt 14 · 142t/s · 47m
 ```
 
-Written in Rust, ships as a single ~1.2 MB binary with zero runtime
-dependencies beyond what every Mac/Linux machine has by default. ~28 ms per
-render on Apple Silicon (vs ~105 ms for the previous Node version), of which
-most of the budget is git subprocesses, not the statusline itself.
+Written in Rust, ships as a single ~1.6 MB binary with zero runtime
+dependencies beyond what every Mac/Linux machine has by default. **~6 ms per
+render** on Apple Silicon (~18× faster than the original Node version, ~6.7×
+faster than the first Rust cut that still used `git` subprocesses). Local
+git operations use libgit2 directly; only the anthropic status check
+involves any non-libgit2 file I/O.
 
 ## Install
 
@@ -99,25 +101,37 @@ claude-code-statusline/
 - 24-bit truecolor used for the context bar; falls back to readable text on
   terminals that don't support it.
 - `Config` reads every env var once at startup; nothing else touches env.
-- Three runtime deps total: `serde` + `serde_json` (JSON), `regex` (TODO/dest
-  patterns), `libc` (ioctl(TIOCGWINSZ) for ancestor-PTY width).
+- Four runtime deps total: `serde` + `serde_json` (JSON), `regex` (TODO/dest
+  patterns), `libc` (ioctl(TIOCGWINSZ) for ancestor-PTY width), `git2`
+  (libgit2 bindings, statically linked via vendored-libgit2 feature so the
+  resulting binary doesn't depend on a system libgit2).
 
 ## Performance
 
 ```
 $ STATUSLINE_DEBUG_TIMING=1 ./target/release/statusline < input.json
-[statusline:timing] total=25.0ms 200cols mode=auto→full len=93
-    12.59ms  git-branch
-    12.10ms  git-branch-fb
-     0.32ms  anthropic-status
-     0.00ms  width-detect
-     0.00ms  transcript-read
-     0.00ms  ftl
-     0.00ms  yak-depth
+[statusline:timing] total=6.2ms 200cols mode=auto→full len=86
+     2.14ms  todo-delta      (libgit2 diff)
+     1.91ms  git-status      (libgit2 status + ahead/behind + stash)
+     1.42ms  anthropic-status (stat /tmp/cc-anthropic-status.json)
+     0.58ms  destruction      (transcript scan for rm/drop/--hard)
+     0.12ms  worktree-stats   (libgit2 worktree enumeration)
+     0.01ms  gitdir-discover  (walk up looking for .git)
+     0.00ms  width-detect, transcript-read, ftl, yak-depth
 ```
 
-98%+ of the render budget is git subprocesses. The pure-Rust compute is
-sub-millisecond.
+Three optimization layers got us here from the original ~40-105ms:
+
+| Version | In-repo | No-repo | Notes |
+|---|---|---|---|
+| Node.js (original) | ~105ms | ~80ms | Node startup dominated |
+| Rust (subprocess git, sequential) | ~40ms | ~25ms | Fork/exec to `git` 3-4× per render |
+| Rust (subprocess git, parallel) | ~20ms | ~1.5ms | `std::thread::scope` for git calls |
+| Rust (libgit2 + fs fast-path) | **~6ms** | **~1.5ms** | Current — no subprocess at all |
+
+The fast path: when `.git/` isn't found, all git work is skipped entirely.
+When found, libgit2 is called directly (no fork/exec) and the branch name
+comes from a 40-byte read of `.git/HEAD` rather than `git symbolic-ref`.
 
 ## Tests
 

@@ -189,12 +189,15 @@ Live, plausible ideas — not next-up but worth keeping warm.
 - **Transcript JSONL (tail-read):** timestamps, output_tokens per turn,
   `sourceToolAssistantUUID`, `isSidechain`, tool_use blocks (destruction
   count, yak depth, last-turn rate).
-- **Filesystem (`fs.statSync`):** worktree HEAD mtimes (stale check),
-  settings.json (plugins), cached Anthropic status.
-- **Git subprocesses:** dirty/stash/ahead-behind, worktree list, diff for
-  TODO delta.
-- **External HTTP (cached):** `status.claude.com/api/v2/status.json`, GitHub
-  `gh` CLI, calendar.
+- **Filesystem (`fs::metadata`):** worktree HEAD mtimes (stale check),
+  `.git/HEAD` read for branch detection, settings.json (plugins),
+  cached Anthropic status.
+- **libgit2 (via `git2` crate, statically linked):** dirty/stash/ahead-behind,
+  worktree enumeration, diff for TODO delta. No subprocess overhead — direct
+  C library calls from the binary.
+- **External HTTP (cached):** `status.claude.com/api/v2/status.json` via a
+  detached background `curl`; result picked up by the next render's
+  reconcile step. No blocking on network in the render hot path.
 - **Derived math:** burn rate, tok/s, $/LOC, mileage, pace projection, FTL.
 
 ### Refresh cadence
@@ -209,9 +212,34 @@ Live, plausible ideas — not next-up but worth keeping warm.
 
 ### Performance budget
 
-CC statusline soft-timeout ≈ 1 second. Each git subprocess ≈ 5-15ms warm,
-50-100ms cold. Aim for total render <100ms warm, <300ms cold. Use
-`STATUSLINE_DEBUG_TIMING=1` to measure.
+CC statusline soft-timeout ≈ 1 second. We target an order of magnitude
+under that — current renders are **~6 ms in-repo, ~1.5 ms no-repo** on
+Apple Silicon, measured via `STATUSLINE_DEBUG_TIMING=1`.
+
+| Layer | Cost | Notes |
+|---|---|---|
+| libgit2 status + ahead/behind + stash | ~2 ms | Single Repository::statuses pass |
+| libgit2 diff for TODO delta | ~2 ms | Skipped when working tree is clean |
+| libgit2 worktree enumeration | ~0.1 ms | Already in memory after Repository open |
+| `fs::metadata` for Anthropic status cache | ~1.5 ms | Single stat call |
+| `.git/HEAD` read for branch | ~10 µs | Reads ~40 bytes |
+| `find_gitdir` walk-up | ~10 µs | Dir-stat per ancestor, usually 1-3 levels |
+| Transcript JSONL tail (256 KB) | ~50 µs | Single tail read + serde parsing |
+| ANSI rendering, formatters, all string ops | <1 ms total | Pure compute |
+
+The pre-Rust Node version was ~105 ms. The first Rust port was ~40 ms.
+Phase 1 (filesystem fast path + parallel subprocesses) cut to ~20 ms.
+Phase 2 (libgit2) cut to ~6 ms. Beyond this, gains would require things
+like (a) caching libgit2's Repository handle across renders (impossible
+without a daemon — each render is a fresh process) or (b) skipping the
+Anthropic status check entirely.
+
+### Optimization journey (Phase 1 → Phase 2)
+
+For curious readers: the commits at `813abca` (Phase 1, parallel-subprocess
++ `.git/HEAD` filesystem reads) and `371cf7c` (Phase 2, libgit2) show the
+two distinct optimization moves with measured before/after numbers in their
+commit messages. Useful reference for understanding what each layer costs.
 
 ---
 
