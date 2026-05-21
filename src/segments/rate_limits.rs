@@ -43,8 +43,25 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
             let (mut full, mut compact) = repr::percent("7d", "7d", pace_obj.used_pct, used_col);
             if let (Some(projected), Some(frac)) = (pace_obj.projected, pace_obj.frac_elapsed) {
                 let pcol = pace::pace_color(projected, frac);
-                full.push_str(&format!(" {}→{}%{}", pcol, projected.round() as i64, RESET));
-                compact.push_str(&format!("{}/{}{}", pcol, projected.round() as i64, RESET));
+                // `~` prefix during the volatile early-window period
+                // (frac < 0.10): the projection is real and worth showing
+                // (day-1 overspend triggers red), but the exact number swings
+                // hour-to-hour until ~17h into the window.
+                let marker = if pace_obj.is_volatile() { "~" } else { "" };
+                full.push_str(&format!(
+                    " {}→{}{}%{}",
+                    pcol,
+                    marker,
+                    projected.round() as i64,
+                    RESET
+                ));
+                compact.push_str(&format!(
+                    "{}/{}{}{}",
+                    pcol,
+                    marker,
+                    projected.round() as i64,
+                    RESET
+                ));
                 if projected > 115.0 || (projected < 80.0 && frac >= 0.70) {
                     red_count += 1;
                 }

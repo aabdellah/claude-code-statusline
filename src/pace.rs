@@ -11,13 +11,32 @@ use crate::input::RateLimitWindow;
 
 const SEVEN_DAY_MS: i64 = 7 * 24 * 3600 * 1000;
 
+/// Below this fraction the projection denominator is small enough that the
+/// number swings wildly hour-to-hour. We still SHOW the projection (day-1
+/// overspend is a real signal worth surfacing — a 50%-in-4h burst means
+/// you'll cap by midweek) but renderers should mark it as volatile so the
+/// reader knows not to over-index on the exact number.
+pub const VOLATILE_FRAC_THRESHOLD: f64 = 0.10;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Pace {
     pub used_pct: f64,
-    /// `None` when we haven't elapsed enough of the window for projection to
-    /// be meaningful (≥10% required, ≤100% required).
+    /// Populated whenever we can compute frac_elapsed (i.e. resets_at is
+    /// present and the window hasn't already passed). Use `is_volatile()`
+    /// to decide whether to display this with a volatility marker.
     pub projected: Option<f64>,
     pub frac_elapsed: Option<f64>,
+}
+
+impl Pace {
+    /// True when we're early enough in the window that the projection
+    /// denominator is unstable. Renderers should mark the projection with
+    /// a `~` prefix (or similar) so the reader doesn't trust the exact value.
+    pub fn is_volatile(&self) -> bool {
+        self.frac_elapsed
+            .map(|f| f < VOLATILE_FRAC_THRESHOLD)
+            .unwrap_or(false)
+    }
 }
 
 pub fn seven_day_pace(seven_day: &RateLimitWindow) -> Option<Pace> {
@@ -41,8 +60,11 @@ pub fn seven_day_pace(seven_day: &RateLimitWindow) -> Option<Pace> {
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0);
     let frac = (now_ms - window_start) as f64 / SEVEN_DAY_MS as f64;
-    // <10% elapsed (~17h in): projection too volatile. >100%: window passed.
-    if !(0.10..=1.0).contains(&frac) {
+    // Project from minute 1. Only suppress when the window has already passed
+    // (frac > 1.0) or clock skew makes frac negative. Early-window numbers
+    // are volatile but a day-1 overspend IS the signal we want to surface;
+    // caller checks `is_volatile()` to decide on a marker.
+    if !(0.0..=1.0).contains(&frac) {
         return Some(pace);
     }
     pace.frac_elapsed = Some(frac);
@@ -80,6 +102,50 @@ mod tests {
     fn pace_color_overpace() {
         assert_eq!(pace_color(120.0, 0.5), ansi::RED);
         assert_eq!(pace_color(110.0, 0.5), ansi::YELLOW);
+    }
+
+    #[test]
+    fn is_volatile_below_threshold() {
+        let p = Pace { used_pct: 50.0, projected: Some(500.0), frac_elapsed: Some(0.05) };
+        assert!(p.is_volatile(), "5% elapsed should be volatile");
+        let p2 = Pace { used_pct: 50.0, projected: Some(100.0), frac_elapsed: Some(0.50) };
+        assert!(!p2.is_volatile(), "50% elapsed should not be volatile");
+    }
+
+    #[test]
+    fn is_volatile_at_exact_threshold() {
+        let p = Pace {
+            used_pct: 50.0,
+            projected: Some(500.0),
+            frac_elapsed: Some(VOLATILE_FRAC_THRESHOLD),
+        };
+        assert!(!p.is_volatile(), "exactly at threshold is no longer volatile");
+    }
+
+    #[test]
+    fn is_volatile_false_when_no_frac() {
+        let p = Pace { used_pct: 50.0, projected: None, frac_elapsed: None };
+        assert!(!p.is_volatile(), "no frac means we can't say it's volatile");
+    }
+
+    #[test]
+    fn seven_day_pace_projects_from_day_one() {
+        // Day-1 projection (frac ≈ 0.024 = ~4 hours into the week).
+        // Reset is in 6.84 days from now → window_start ≈ 4h ago.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let reset_ms = now_ms + SEVEN_DAY_MS - 4 * 3600 * 1000;
+        let rlw = RateLimitWindow {
+            used_percentage: Some(2.0), // 2% used in ~4h
+            resets_at: Some(serde_json::Value::Number(serde_json::Number::from(reset_ms / 1000))),
+        };
+        let p = seven_day_pace(&rlw).expect("returns Some");
+        let projected = p.projected.expect("projection populated on day 1");
+        // 2% / 0.024 ≈ 83%. Tolerant assertion — just want "in the ballpark".
+        assert!(projected > 60.0 && projected < 110.0, "projection ~83%, got {projected}");
+        assert!(p.is_volatile(), "day-1 marked volatile");
     }
 
     #[test]
