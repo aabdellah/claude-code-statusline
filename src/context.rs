@@ -69,7 +69,11 @@ impl<'a> RenderContext<'a> {
 
         let in_repo = repo_name.is_some() || gitdir.is_some();
         let in_worktree = input.worktree.as_ref().map(|w| w.name.is_some()).unwrap_or(false)
-            || input.workspace.as_ref().and_then(|w| w.git_worktree).unwrap_or(false);
+            || input
+                .workspace
+                .as_ref()
+                .and_then(|w| w.git_worktree.as_deref())
+                .is_some();
 
         // libgit2 calls are sub-ms each; sequential is fine.
         let (git_status, worktree_stats) = if in_repo {

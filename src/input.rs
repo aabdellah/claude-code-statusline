@@ -46,7 +46,14 @@ pub struct Workspace {
     pub current_dir: Option<String>,
     pub project_dir: Option<String>,
     pub repo: Option<WorkspaceRepo>,
-    pub git_worktree: Option<bool>,
+    /// As of CC v2.1.145+, `workspace.git_worktree` is a STRING (the worktree
+    /// name, e.g. "dump-test") for worktree sessions and absent otherwise.
+    /// Earlier CC versions sent a bool. Typing this as `Option<bool>` caused
+    /// the entire `Workspace` parse to fail, which (via serde's #[serde(default)]
+    /// on StatusInput and the `unwrap_or_default()` in `parse_lenient`)
+    /// silently defaulted EVERY field in the JSON — collapsing the statusline
+    /// inside worktrees to just the model fallback and repo name.
+    pub git_worktree: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -147,14 +154,53 @@ pub struct Cost {
 }
 
 impl StatusInput {
-    /// Parse from JSON bytes, defaulting to an empty struct on any error.
-    /// Mirrors the Node version's `try { data = JSON.parse(buf || '{}') } catch {}`.
+    /// Parse from JSON bytes, field-by-field. A single drifted field
+    /// (`workspace.git_worktree` once changed from bool to String, blanking
+    /// the entire statusline in worktrees) only defaults its own top-level
+    /// slot — all other fields survive. Net: one schema-drift incident
+    /// degrades gracefully to "one segment missing" instead of "whole line
+    /// empty".
     pub fn parse_lenient(buf: &[u8]) -> Self {
         if buf.is_empty() {
             return Self::default();
         }
-        serde_json::from_slice(buf).unwrap_or_default()
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(buf) else {
+            return Self::default();
+        };
+        let Some(obj) = v.as_object() else {
+            return Self::default();
+        };
+        Self {
+            model: field(obj, "model"),
+            workspace: field(obj, "workspace"),
+            worktree: field(obj, "worktree"),
+            pr: field(obj, "pr"),
+            context_window: field(obj, "context_window"),
+            effort: field(obj, "effort"),
+            thinking: field(obj, "thinking"),
+            fast_mode: field(obj, "fast_mode"),
+            output_style: field(obj, "output_style"),
+            rate_limits: field(obj, "rate_limits"),
+            cost: field(obj, "cost"),
+            transcript_path: field(obj, "transcript_path"),
+            cwd: field(obj, "cwd"),
+            version: field(obj, "version"),
+            session_id: field(obj, "session_id"),
+            exceeds_200k_tokens: field(obj, "exceeds_200k_tokens"),
+        }
     }
+}
+
+/// Extract a single field, defaulting on missing-or-malformed. Isolates
+/// schema drift to the affected slot only.
+fn field<T: Default + serde::de::DeserializeOwned>(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> T {
+    obj.get(key)
+        .cloned()
+        .and_then(|v| serde_json::from_value::<T>(v).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -186,6 +232,55 @@ mod tests {
         assert_eq!(s.model.as_ref().unwrap().display_name.as_deref(), Some("Opus 4.7"));
         assert_eq!(s.context_window.unwrap().used_percentage, Some(42.0));
         assert_eq!(s.cost.unwrap().total_cost_usd, Some(1.23));
+    }
+
+    #[test]
+    fn schema_drift_in_one_field_does_not_blank_the_others() {
+        // Defensive parse: if a single top-level field drifts to an unparseable
+        // shape (here: `model` becomes a bare string instead of an object),
+        // only that field defaults to None — every other field survives.
+        // Without field-by-field parsing, this would default the ENTIRE
+        // StatusInput, hiding cost, context_window, rate_limits, etc.
+        let json = br#"{
+            "model": "claude-opus",
+            "cost": {"total_cost_usd": 4.2},
+            "context_window": {"used_percentage": 50},
+            "rate_limits": {"five_hour": {"used_percentage": 30}}
+        }"#;
+        let s = StatusInput::parse_lenient(json);
+        assert!(s.model.is_none(), "drifted field defaults to None");
+        assert_eq!(s.cost.unwrap().total_cost_usd, Some(4.2));
+        assert_eq!(s.context_window.unwrap().used_percentage, Some(50.0));
+        assert!(s.rate_limits.is_some());
+    }
+
+    #[test]
+    fn worktree_session_with_git_worktree_string_preserves_all_fields() {
+        // Regression: as of CC v2.1.145+, `workspace.git_worktree` is a STRING
+        // (the worktree name) for worktree sessions. Earlier CC versions sent
+        // a bool. When this struct typed it as `Option<bool>`, serde failed
+        // to deserialize the whole Workspace — and because parse_lenient does
+        // `unwrap_or_default()` on parse failure, the entire StatusInput
+        // silently collapsed to empty, hiding every metric (model, cost,
+        // context_window, rate_limits) for every worktree render.
+        let json = br#"{
+            "model": {"display_name": "Opus 4.7", "id": "claude-opus-4-7"},
+            "workspace": {
+                "current_dir": "/repo/.claude/worktrees/feat-x",
+                "git_worktree": "feat-x"
+            },
+            "worktree": {"name": "feat-x", "branch": "wt-feat-x", "original_branch": "main"},
+            "context_window": {"used_percentage": 17},
+            "cost": {"total_cost_usd": 4.2}
+        }"#;
+        let s = StatusInput::parse_lenient(json);
+        assert_eq!(s.model.as_ref().unwrap().display_name.as_deref(), Some("Opus 4.7"));
+        assert_eq!(s.cost.unwrap().total_cost_usd, Some(4.2));
+        assert_eq!(s.context_window.unwrap().used_percentage, Some(17.0));
+        assert_eq!(
+            s.workspace.as_ref().unwrap().git_worktree.as_deref(),
+            Some("feat-x")
+        );
     }
 
     #[test]

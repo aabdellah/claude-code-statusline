@@ -105,6 +105,17 @@ cargo build --release
   only render the effort word. Don't re-add a "thinking" indicator
   without verifying the fields can actually disagree.
 
+- **`workspace.git_worktree` is a STRING (worktree name), not a bool.**
+  CC v2.1.145+ ships it as `"git_worktree": "feat-x"`. Earlier versions
+  sent a bool. When this struct typed it as `Option<bool>`, serde failed
+  on the whole `Workspace`, and (because of the old all-or-nothing
+  `parse_lenient`) the WHOLE `StatusInput` defaulted to empty — collapsing
+  every worktree statusline to `claude · branch` with no metrics. Fixed by
+  retyping AND switching `parse_lenient` to field-by-field so one drift
+  can never blank everything again. New top-level fields added to CC's
+  contract require updates to both the struct AND the `field(obj, "...")`
+  call list in `parse_lenient`.
+
 ## Conventions
 
 - **Test ANSI-bearing output by stripping escapes first** —
@@ -120,8 +131,12 @@ cargo build --release
   triggers `cargo build --release` on source edits via `cargo-watch`.
 
 - **STATUSLINE_DUMP_INPUT=1** writes the raw stdin JSON to
-  `/tmp/cc-statusline-input.json`. Use this to detect schema drift
-  the next time CC changes a field's location or semantics.
+  `/tmp/cc-statusline-input.json` AND to
+  `/tmp/cc-statusline-dumps/<session_id>.json`. The per-session path
+  matters: the single-file path is shared across every concurrent CC
+  session on the machine, so race-overwrites give false negatives when
+  investigating one session's render. Always use the per-session file when
+  diagnosing a specific session.
 
 ## Performance notes
 
