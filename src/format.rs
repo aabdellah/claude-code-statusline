@@ -227,8 +227,17 @@ pub fn fmt_lines_compact(n: u64) -> String {
 // --- Context window ---------------------------------------------------------
 
 /// 1,000,000 → "1m"; 1,500,000 → "1.5m"; 200,000 → "200k"; 1,000 → "1k".
+///
+/// At ≥100M, decimal precision is noise — `672_000_001` should render "672m"
+/// not "672.0m". Originally tuned for clean context-window values (1m / 1.5m),
+/// the function now also formats large cross-session token sums where exact
+/// divisibility essentially never holds.
 pub fn fmt_ctx_size(tokens: u64) -> String {
     if tokens == 0 { return String::new(); }
+    if tokens >= 100_000_000 {
+        let m = tokens as f64 / 1_000_000.0;
+        return format!("{}m", m.round() as i64);
+    }
     if tokens >= 1_000_000 {
         let m = tokens as f64 / 1_000_000.0;
         if (m - m.round()).abs() < f64::EPSILON {
@@ -393,6 +402,9 @@ mod tests {
         assert_eq!(fmt_ctx_size(200_000), "200k");
         assert_eq!(fmt_ctx_size(1_000_000), "1m");
         assert_eq!(fmt_ctx_size(1_500_000), "1.5m");
+        // Large sums skip the decimal — 672M+1 should be "672m", not "672.0m"
+        assert_eq!(fmt_ctx_size(672_000_001), "672m");
+        assert_eq!(fmt_ctx_size(100_000_000), "100m");
     }
 
     #[test]

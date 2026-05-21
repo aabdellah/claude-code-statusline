@@ -138,6 +138,26 @@ cargo build --release
   investigating one session's render. Always use the per-session file when
   diagnosing a specific session.
 
+- **`STATUSLINE_PRICING_SOURCE=offline`** disables the LiteLLM pricing
+  fetch and forces the embedded Claude 4-family constants for the
+  cross-session today rollup. The cache file (`/tmp/cc-statusline-pricing.json`)
+  is still consulted if present — "offline" means "don't make new network
+  calls," not "ignore any prior cache." For airgapped builds also pass
+  this and `rm` the cache file. Live fetch is from
+  `raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+  with 24h TTL and a 1h failed-attempt throttle. Filters by
+  `litellm_provider == "anthropic"`; unknown models fall back to family
+  substring match (opus/sonnet/haiku), then to `None` (tokens still
+  counted, $ skipped).
+
+- **Embedded pricing constants drift fast.** When live pricing first
+  landed (2026-05-21), the embedded Opus rates were ~3× current Anthropic
+  prices because Opus 4.7 dropped to $5/$25/M (input/output) but the
+  embedded numbers were still at Opus 4.0-era $15/$75/M. Live LiteLLM
+  data is the correct default; embedded is the fallback for unreachable
+  LiteLLM. Don't trust the embedded numbers as ground truth — they're a
+  graceful-degradation floor only.
+
 ## Performance notes
 
 - Render budget: **~6ms in-repo, ~1.5ms no-repo** on Apple Silicon.

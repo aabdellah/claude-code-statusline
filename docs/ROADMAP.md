@@ -57,6 +57,7 @@ where it lives.
 | Lines +/- | `src/render.rs` | From `cost.total_lines_added/removed` |
 | $/LOC | `src/format.rs` :: `fmt_dollars_per_loc` | Hidden if <50 LOC (denominator noise) |
 | Token mileage | `src/format.rs` :: `fmt_mileage` | `mpt 16` — LOC accepted per 1k tokens |
+| Today $ + tokens | `src/segments/today_spend.rs` + `src/aggregate.rs` + `src/pricing.rs` | Cross-session rollup since LOCAL midnight. Renders `today $12.4 1.2m`. Tokens are ground-truth (summed from JSONL `usage.*`); $ uses **live LiteLLM pricing** (fetched 24h-cached from BerriAI), with Claude 4-family embedded constants as fallback when LiteLLM is unreachable. Rollup cache: `/tmp/cc-statusline-today.json`, 60s TTL, refreshed by detached `self --refresh-today`. Pricing cache: `/tmp/cc-statusline-pricing.json`, 24h TTL, refreshed synchronously inside the same detached process (network blocking is fine there). mtime-filters JSONLs older than today's midnight so we never open dormant files. Full scan ~450ms (incl. LiteLLM fetch on day rollover); cache read ~1ms. Opt out of network fetch with `STATUSLINE_PRICING_SOURCE=offline`. |
 
 ### Performance + meta
 
@@ -90,27 +91,53 @@ where it lives.
 ## 🎯 Planned (next up)
 
 Highest-signal ideas from the brainstorm, ranked roughly by impact-per-effort.
+Refreshed 2026-05-21 after auditing 18+ competitor projects; the items here
+are the ones either novel to us or convergently validated across peers.
 
-1. **Untested code Δ** — `untested +247` (git diff lines in `src/` without
+1. **OAuth `/api/oauth/usage` for canonical 5h/7d** — Two competitors
+   (`CCometixLine`, `claude-code-mascot`) independently read
+   `~/.claude/.credentials.json` / macOS Keychain and call Anthropic's own
+   `/api/oauth/usage` endpoint with `anthropic-beta: oauth-2025-04-20`.
+   Returns real `{five_hour: utilization, resets_at}` etc — solves the
+   "cost is notional for subscribers" problem from CLAUDE.md. Mirrors the
+   detached-fetch + 5min cache pattern from `anthropic.rs` / `aggregate.rs`.
+   _Risk: undocumented `anthropic-beta` header; ToS-adjacent (Anthropic's
+   own client uses it, so it's likely fine — but worth flagging in docs)._
+
+2. **Active git operation** (`MERGE`/`REBASE`/`CHERRY-PICK`) — Single call
+   to `git2::Repository::state()`; renders as a badge next to branch. Load-
+   bearing during conflict resolution. Trivial — maybe 30 lines.
+
+3. **Untested code Δ** — `untested +247` (git diff lines in `src/` without
    matching test changes). Cumulative "you owe tests" debt for the session.
    _Data: `git diff --stat` two passes, one filtered to source/, one to test
-   patterns; subtract._
+   patterns; subtract._ Genuinely novel — none of the 18+ competitors ship this.
 
-2. **Time since last commit** — `nocommit 47m`. The "save your work" nag.
+4. **Time since last commit** — `nocommit 47m`. The "save your work" nag.
    _Data: `git log -1 --format=%ct` mtime delta. Effectively free._
 
-3. **Compact counter** — `cmp:3` (number of auto-compactions this session).
+5. **Compact counter** — `cmp:3` (number of auto-compactions this session).
    After 3-4 compactions model quality drifts; surface it as hard data.
    _Data: scan transcript JSONL for compaction event markers._
 
-4. **Auto-compact distance** — `cmp in 12%` (replaces `ctx 78%` framing
+6. **Auto-compact distance** — `cmp in 12%` (replaces `ctx 78%` framing
    above ~70%). Distance-to-event vs absolute usage; more actionable.
    _Data: ctx % math; just a re-frame of the existing segment._
 
-5. **Burn acceleration** — `$24/h ↑` when last 10 min is N× the session
+7. **Burn acceleration** — `$24/h ↑` when last 10 min is N× the session
    average. Catches runaway agents in real time, not after the bill arrives.
    _Data: split cost.total_cost_usd against transcript timestamps to derive
    recent burn vs trailing average._
+
+8. **Block cost projection** — `proj $14 by reset` next to the 5h block.
+   `current + (burn_rate × minutes_remaining)`. Cleaner than 7d-pace
+   projection because bounded by the 5h window. Validated by `ccusage`
+   and `rz1989s/claude-code-statusline`.
+
+9. **Context-fill ETA** — `eta:15m` (until `/compact`). Velocity from a
+   disk-persisted ring buffer of `(ctx_pct, ts_ms)` samples. Codachi shipped
+   the formula but with an in-memory buffer (always returns 0); we'd do it
+   correctly with disk persistence.
 
 ---
 
@@ -129,6 +156,13 @@ Live, plausible ideas — not next-up but worth keeping warm.
   uncommitted work). "What do I lose if I bail right now?"
 - **Idle threshold warning** — `IDLE 8m` only when no user msg in >5min
   during a high-cost burn. The "walked away while an agent burned $40" catcher.
+- **Off-peak promo indicator** (`⬆` next to 5h) — Detects active Anthropic
+  usage-promotion windows where 5h limit is boosted and excess doesn't count
+  toward 7d. Directly actionable (work harder during off-peak). From
+  `lexfrei/claudeline`.
+- **Conflicts glyph** (`⚠`) — Distinct from "dirty" — files in `UU`/`AA`/`DD`
+  state block all forward motion. Three competitors carry this as a separate
+  state from generic dirty.
 
 ### Productivity / meta
 
@@ -140,6 +174,15 @@ Live, plausible ideas — not next-up but worth keeping warm.
   awareness when breaking your own records.
 - **Same-repo active sessions** — `cc:3` other CC processes in the same repo.
   "You forgot a tab somewhere."
+- **Per-session deterministic color hash** — `hash(session_id) → palette[20]`
+  so the same session is always the same color across tmux panes. From
+  `jbarbier/which-claude-code`. Trivial — pairs naturally with our worktree
+  segment for multi-pane visual distinguishability.
+- **Hook-derived booleans** (struggling / rapid-edit / exploring) — A
+  `PostToolUse` hook writes a 50-entry rolling event log; segment derives
+  `fail:3↑` (consecutive bash failures), `edit:7/60s` (rapid edits), or
+  `read:9/60s` (exploring). Requires a hook subsystem (contradicts pure-stdin
+  design) but high signal. From `codachi`.
 
 ### External world
 
@@ -175,6 +218,15 @@ Live, plausible ideas — not next-up but worth keeping warm.
   of the numbers. The boss-fight gradient already serves this purpose.
 - **Real-time MCP health (subprocess-per-render)** — overhead too high. A
   cached variant is still in [Backlog](#safety--signals).
+- **Pet/mascot reacting to hooks** — Three TS projects converged on this
+  (`ccpet`, `codachi`, `claude-code-mascot`). The underlying *signals* they
+  derive (hook-driven booleans, context ETA) are interesting; the visual
+  layer is not. We extract the signals into our own segments — see backlog
+  entries — and skip the affective layer.
+- **Daemon mode** — `claude-statusbar`'s sub-1% CPU daemon solves a Python
+  startup problem we don't have. We're 6ms total; daemon-fication is
+  unwarranted complexity. Mtime-filtered file scan + atomic-rename cache
+  (see `aggregate.rs`) gets the same effect without a daemon.
 
 ---
 

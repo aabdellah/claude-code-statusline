@@ -4,6 +4,7 @@
 //! single rendered line to stdout. See `render.rs` for layout details and
 //! `docs/ROADMAP.md` for shipped segments + backlog.
 
+mod aggregate;
 mod ansi;
 mod anthropic;
 mod config;
@@ -13,6 +14,7 @@ mod git;
 mod input;
 mod layout;
 mod pace;
+mod pricing;
 mod render;
 mod repr;
 mod segments;
@@ -22,6 +24,14 @@ mod width;
 use std::io::{self, Read, Write};
 
 fn main() {
+    // Self-invocation entry point for the background today-rollup refresh.
+    // We're spawned with no stdin and `--refresh-today`; do the scan, write
+    // the tmp cache file, and exit before touching the statusline render path.
+    if std::env::args().any(|a| a == "--refresh-today") {
+        aggregate::run_refresh_today();
+        return;
+    }
+
     let mut buf = Vec::with_capacity(4096);
     let _ = io::stdin().read_to_end(&mut buf);
 

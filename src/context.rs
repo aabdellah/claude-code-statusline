@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::aggregate::{self, TodayRollup};
 use crate::config::{self, Config};
 use crate::git::{self, GitStatus, WorktreeStats};
 use crate::input::StatusInput;
@@ -30,6 +31,11 @@ pub struct RenderContext<'a> {
     pub worktree_stats: WorktreeStats,
 
     pub transcript: Vec<serde_json::Value>,
+
+    /// Cross-session today rollup (cost + tokens since local midnight). `None`
+    /// when the cache hasn't been populated yet — first render of a session or
+    /// just after a cache invalidation. Populated lazily by a detached refresh.
+    pub today: Option<TodayRollup>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -88,6 +94,11 @@ impl<'a> RenderContext<'a> {
             transcript::read_transcript_tail(input.transcript_path.as_deref())
         });
 
+        // Today's cross-session $ + tokens. Reads a /tmp cache file; spawns
+        // a detached `self --refresh-today` if the cache is stale or missing.
+        // Returns `None` on first run until the background refresh lands.
+        let today = config::timed("today-rollup", cfg.debug_timing, aggregate::read_today);
+
         // `gitdir` is computed only to derive `branch` — segments don't
         // need it directly today. If a future segment wants it, add it back
         // as a field and propagate through the build.
@@ -99,6 +110,7 @@ impl<'a> RenderContext<'a> {
             in_repo, in_worktree, branch,
             git_status, worktree_stats,
             transcript,
+            today,
         }
     }
 

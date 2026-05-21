@@ -47,6 +47,7 @@ pub mod output_style;
 pub mod perf;
 pub mod rate_limits;
 pub mod repo;
+pub mod today_spend;
 pub mod todo;
 pub mod yak;
 
@@ -72,6 +73,7 @@ pub static FUNCS: &[fn(&RenderContext) -> Option<Seg>] = &[
     rate_limits::render,
     cache::render,
     cost::render,
+    today_spend::render,
     perf::render,
     api_time::render,
     duration::render,
