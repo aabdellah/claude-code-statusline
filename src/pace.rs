@@ -28,6 +28,10 @@ pub struct Pace {
     pub frac_elapsed: Option<f64>,
 }
 
+/// 1 day / 7 days. The 7d window enters its "recovery-imminent" phase when
+/// frac_elapsed crosses this threshold (~85.7%).
+pub const LAST_24H_FRAC: f64 = 6.0 / 7.0;
+
 impl Pace {
     /// True when we're early enough in the window that the projection
     /// denominator is unstable. Renderers should mark the projection with
@@ -35,6 +39,15 @@ impl Pace {
     pub fn is_volatile(&self) -> bool {
         self.frac_elapsed
             .map(|f| f < VOLATILE_FRAC_THRESHOLD)
+            .unwrap_or(false)
+    }
+
+    /// True when <24h remain until the 7d window resets. Renderers should
+    /// surface a recovery countdown (`→22h`) so the user can see how close
+    /// they are to a fresh budget — the actionable signal late in the week.
+    pub fn in_last_24h(&self) -> bool {
+        self.frac_elapsed
+            .map(|f| f >= LAST_24H_FRAC)
             .unwrap_or(false)
     }
 }
@@ -110,6 +123,16 @@ mod tests {
         assert!(p.is_volatile(), "5% elapsed should be volatile");
         let p2 = Pace { used_pct: 50.0, projected: Some(100.0), frac_elapsed: Some(0.50) };
         assert!(!p2.is_volatile(), "50% elapsed should not be volatile");
+    }
+
+    #[test]
+    fn in_last_24h_threshold() {
+        let early = Pace { used_pct: 50.0, projected: Some(100.0), frac_elapsed: Some(0.5) };
+        assert!(!early.in_last_24h(), "mid-week is not last 24h");
+        let late = Pace { used_pct: 90.0, projected: Some(100.0), frac_elapsed: Some(6.5 / 7.0) };
+        assert!(late.in_last_24h(), "12h before reset is last 24h");
+        let boundary = Pace { used_pct: 86.0, projected: Some(100.0), frac_elapsed: Some(LAST_24H_FRAC) };
+        assert!(boundary.in_last_24h(), "exactly at threshold counts as last 24h");
     }
 
     #[test]

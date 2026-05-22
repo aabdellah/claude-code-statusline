@@ -1,11 +1,13 @@
 //! Rate limits — 5h + 7d windows with usage % and projection.
-//!   full     "5h 64%→2h15m 7d 71%→98%"
-//!   compact  "5h:64 7d:71/98"
+//!   full     "5h 64%→2h15m 7d 71%→98%"      mid-week
+//!   full     "5h 64%→1h2m 7d 90%→22h→100%"  last 24h of the 7d window
+//!   compact  "5h:64 7d:71/98"               mid-week
+//!   compact  "5h:64 7d:90/22h/100"          last 24h
 //!
 //! Contributes red signals: 5h ≥90%, 7d ≥90%, projection over 115% or
 //! significantly underpace late in the week.
 
-use crate::ansi::{self, DIM, RESET};
+use crate::ansi::{self, DIM, GREEN, RESET};
 use crate::context::RenderContext;
 use crate::format::fmt_reset_time;
 use crate::layout::{Priority, Seg};
@@ -41,6 +43,22 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         if let Some(pace_obj) = pace::seven_day_pace(sd) {
             let used_col = ansi::pct_color(pace_obj.used_pct, 70.0, 90.0);
             let (mut full, mut compact) = repr::percent("7d", "7d", pace_obj.used_pct, used_col);
+
+            // In the last 24h of the window, render the reset countdown
+            // BEFORE the projection — recovery is the actionable signal at
+            // this point. GREEN to communicate "almost there, hold on".
+            if pace_obj.in_last_24h() {
+                if let Some(reset_str) = sd
+                    .resets_at
+                    .as_ref()
+                    .map(fmt_reset_time)
+                    .filter(|s| !s.is_empty())
+                {
+                    full.push_str(&format!(" {}→{}{}", GREEN, reset_str, RESET));
+                    compact.push_str(&format!("{}/{}{}", GREEN, reset_str, RESET));
+                }
+            }
+
             if let (Some(projected), Some(frac)) = (pace_obj.projected, pace_obj.frac_elapsed) {
                 let pcol = pace::pace_color(projected, frac);
                 // `~` prefix during the volatile early-window period
