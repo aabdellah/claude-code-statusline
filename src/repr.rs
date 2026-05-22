@@ -93,25 +93,7 @@ mod tests {
     use super::*;
     use crate::ansi::{DIM, GREEN, YELLOW};
 
-    /// Strip ANSI CSI escapes — assertions on visible content are clearer
-    /// than scanning byte streams that have color codes interleaved.
-    /// Iterates `chars()` not `bytes()`: visible content commonly includes
-    /// multi-byte glyphs (●, ↑, █, ·) and a byte-cast (`b as char`) would
-    /// corrupt them silently.
-    fn strip(s: &str) -> String {
-        let mut out = String::new();
-        let mut state = 0u8;
-        for c in s.chars() {
-            match state {
-                0 if c == '\u{1b}' => state = 1,
-                0 => out.push(c),
-                1 => state = if c == '[' { 2 } else { 0 },
-                2 if matches!(c, '\u{40}'..='\u{7E}') => state = 0,
-                _ => {}
-            }
-        }
-        out
-    }
+    use crate::ansi::strip_ansi as strip;
 
     #[test]
     fn counter_uses_colon_in_both_variants() {

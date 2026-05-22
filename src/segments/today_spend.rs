@@ -85,23 +85,7 @@ mod tests {
     use crate::input::StatusInput;
     use std::path::PathBuf;
 
-    /// Strip ANSI CSI escapes for assertion-readable comparisons. UTF-8 aware
-    /// (the segment uses `·`, a multi-byte char, that the byte-iterating strip
-    /// in repr.rs would mangle).
-    fn strip(s: &str) -> String {
-        let mut out = String::new();
-        let mut state = 0u8;
-        for c in s.chars() {
-            match state {
-                0 if c == '\u{1b}' => state = 1,
-                0 => out.push(c),
-                1 => state = if c == '[' { 2 } else { 0 },
-                2 if matches!(c, '\u{40}'..='\u{7E}') => state = 0,
-                _ => {}
-            }
-        }
-        out
-    }
+    use crate::ansi::strip_ansi as strip;
 
     fn ctx_with_today<'a>(
         input: &'a StatusInput,

@@ -59,6 +59,29 @@ pub fn visible_length(s: &str) -> usize {
     visible_length_internal(s)
 }
 
+/// Strip ANSI CSI escapes for test assertions on visible content. Iterates
+/// `chars()` (not `bytes()`) so it preserves multi-byte glyphs commonly
+/// present in segment output (●, ↑, █, ·). The byte-cast pattern (`b as
+/// char`) silently corrupts those.
+///
+/// Single source of truth — any segment test that asserts on rendered
+/// output should `use crate::ansi::strip_ansi;` instead of rolling its own.
+#[cfg(test)]
+pub(crate) fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut state = 0u8;
+    for c in s.chars() {
+        match state {
+            0 if c == '\u{1b}' => state = 1,
+            0 => out.push(c),
+            1 => state = if c == '[' { 2 } else { 0 },
+            2 if matches!(c, '\u{40}'..='\u{7E}') => state = 0,
+            _ => {}
+        }
+    }
+    out
+}
+
 /// 24-bit truecolor RGB foreground sequence builder.
 /// Returns a heap String — escape sequences are tiny so allocation is cheap.
 pub fn rgb(r: u8, g: u8, b: u8) -> String {
