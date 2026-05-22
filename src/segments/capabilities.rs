@@ -27,10 +27,10 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     if let Some(lvl) = ctx.input.effort.as_ref().and_then(|e| e.level.as_deref()) {
         let col: String = match lvl {
             "max" => format!("{}{}", BOLD, RED),
-            "xhigh" => RED.to_string(),
-            "high" => YELLOW.to_string(),
-            "medium" => GREEN.to_string(),
-            _ => DIM.to_string(),
+            "xhigh" => RED.to_owned(),
+            "high" => YELLOW.to_owned(),
+            "medium" => GREEN.to_owned(),
+            _ => DIM.to_owned(),
         };
         let micro_lvl: String = lvl.chars().take(3).collect();
         full_bits.push(format!("{}{}{}", col, lvl, crate::ansi::RESET));

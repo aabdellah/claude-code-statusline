@@ -131,7 +131,7 @@ fn rand_bool_35pct() -> bool {
             ^ std::process::id() as u64;
         std::sync::Mutex::new(seed)
     });
-    let mut s = mutex.lock().unwrap();
+    let mut s = mutex.lock().unwrap_or_else(|p| p.into_inner());
     *s = s.wrapping_add(0x9E3779B97F4A7C15);
     let mut z = *s;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
@@ -184,8 +184,11 @@ pub fn gradient_bar(pct: f64, width: usize, no_blink: bool) -> String {
     } else {
         for i in 0..filled {
             let t = if width == 1 { 1.0 } else { i as f32 / (width as f32 - 1.0) };
-            write!(out, "{}", grad_color(t)).unwrap();
-            out.push('█');
+            let (r, g, b) = gradient(t);
+            // write! direct to `out` — avoids the per-cell String allocation
+            // that `grad_color(t)` would produce (it builds a `format!` then
+            // we'd immediately write+drop it). Saves up to `width` allocs.
+            write!(out, "\x1b[38;2;{};{};{}m█", r, g, b).unwrap();
         }
         if filled < width {
             out.push_str(RESET);

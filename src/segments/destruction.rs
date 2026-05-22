@@ -17,9 +17,9 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let col: String = if count >= 6 {
         format!("{}{}", BOLD, RED)
     } else if count >= 3 {
-        RED.to_string()
+        RED.to_owned()
     } else {
-        YELLOW.to_string()
+        YELLOW.to_owned()
     };
 
     let (full, compact) = repr::counter("rm", "rm", count, &col);

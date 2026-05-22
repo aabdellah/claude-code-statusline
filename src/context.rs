@@ -182,9 +182,15 @@ impl<'a> RenderContext<'a> {
     }
 
     /// Resolve "what repo name to display" using the schema's repo.name if
-    /// present, else the cwd's last component.
-    pub fn display_repo(&self) -> String {
-        self.repo_name.clone().unwrap_or_else(|| self.cwd_name().to_string())
+    /// present, else the cwd's last component. Returns `Cow::Borrowed` when
+    /// borrowing is possible — only owned when neither source produces a
+    /// usable `&str` (`PathBuf::file_name()` returning non-UTF-8).
+    pub fn display_repo(&self) -> std::borrow::Cow<'_, str> {
+        if let Some(name) = self.repo_name.as_deref() {
+            std::borrow::Cow::Borrowed(name)
+        } else {
+            std::borrow::Cow::Borrowed(self.cwd_name())
+        }
     }
 
     /// Borrow cwd as a Path for libgit2 calls.

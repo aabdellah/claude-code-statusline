@@ -14,8 +14,8 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
 
     let col = match status.as_str() {
         "critical" => format!("{}{}", BOLD, RED),
-        "major" => RED.to_string(),
-        _ => YELLOW.to_string(),
+        "major" => RED.to_owned(),
+        _ => YELLOW.to_owned(),
     };
     let is_red = status != "minor";
 

@@ -98,19 +98,27 @@ pub fn timed<T, F: FnOnce() -> T>(name: &'static str, debug: bool, f: F) -> T {
     let start = Instant::now();
     let r = f();
     let ms = start.elapsed().as_secs_f64() * 1000.0;
-    TIMINGS.lock().unwrap().push((name, ms));
+    timings_lock().push((name, ms));
     r
 }
 
 // Process-wide timings buffer. A Mutex<Vec<_>> is fine here — statusline
 // renders are single-threaded so contention is zero. The Mutex exists just
 // to satisfy Rust's interior-mutability rules for the static.
-pub static TIMINGS: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
+pub(crate) static TIMINGS: Mutex<Vec<(&'static str, f64)>> = Mutex::new(Vec::new());
 
-pub fn reset_timings() {
-    TIMINGS.lock().unwrap().clear();
+/// Lock TIMINGS while gracefully recovering from poisoning. In this binary
+/// the Mutex is only contended by a single thread, so `unwrap()` would
+/// never fire in practice — but `into_inner()` makes the recovery semantics
+/// explicit, and avoids ever panicking on an instrumentation path.
+fn timings_lock() -> std::sync::MutexGuard<'static, Vec<(&'static str, f64)>> {
+    TIMINGS.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-pub fn drain_timings() -> Vec<(&'static str, f64)> {
-    std::mem::take(&mut *TIMINGS.lock().unwrap())
+pub(crate) fn reset_timings() {
+    timings_lock().clear();
+}
+
+pub(crate) fn drain_timings() -> Vec<(&'static str, f64)> {
+    std::mem::take(&mut *timings_lock())
 }
