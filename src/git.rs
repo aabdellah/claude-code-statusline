@@ -86,7 +86,10 @@ pub fn branch_or_sha_from_head(gitdir: &Path) -> Option<String> {
         return Some(branch.to_string());
     }
     if head.len() >= 7 && head.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Some(head[..7].to_string());
+        // chars().take().collect() instead of byte-slicing — safe because
+        // the all(is_ascii_hexdigit) guard implies single-byte chars, but
+        // CLAUDE.md mandates no byte-slicing on filesystem-sourced strings.
+        return Some(head.chars().take(7).collect());
     }
     None
 }

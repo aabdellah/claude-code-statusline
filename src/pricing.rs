@@ -249,12 +249,18 @@ fn parse_litellm_json(bytes: &[u8]) -> Option<HashMap<String, Pricing>> {
 /// unchanged when there's no date suffix to strip.
 fn strip_date_suffix(s: &str) -> String {
     if let Some(idx) = s.rfind('-') {
-        let suffix = &s[idx+1..];
+        // split_at is char-boundary-safe whereas direct byte-slicing would
+        // panic if `s` ever contained multi-byte chars before the hyphen.
+        // `idx` is a byte offset of an ASCII '-', which IS a valid boundary,
+        // so split_at always succeeds — but expressing it this way removes
+        // the byte-slice (per CLAUDE.md convention on network-sourced data).
+        let (prefix, after_hyphen) = s.split_at(idx);
+        let suffix = &after_hyphen[1..]; // skip the '-' itself
         if suffix.len() >= 6 && suffix.chars().all(|c| c.is_ascii_digit()) {
-            return s[..idx].to_string();
+            return prefix.to_owned();
         }
     }
-    s.to_string()
+    s.to_owned()
 }
 
 #[cfg(test)]
