@@ -11,7 +11,6 @@ use crate::context::RenderContext;
 use crate::format::fmt_ttl;
 use crate::layout::{Priority, Seg};
 use crate::repr;
-use crate::transcript;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let usage = ctx
@@ -22,7 +21,7 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let cache_read = usage.and_then(|u| u.cache_read_input_tokens).unwrap_or(0);
     let cache_create = usage.and_then(|u| u.cache_creation_input_tokens).unwrap_or(0);
     let cache_total = cache_read + cache_create;
-    let ttl_ms = transcript::cache_ttl_ms_remaining(&ctx.transcript);
+    let ttl_ms = ctx.cache_ttl_ms;
 
     let mut full_bits: Vec<String> = Vec::new();
     let mut compact_bits: Vec<String> = Vec::new();

@@ -119,8 +119,14 @@ mod tests {
             branch: None,
             git_status: GitStatus::default(),
             worktree_stats: WorktreeStats::default(),
-            transcript: Vec::new(),
             today,
+            yak_depth: 0,
+            destruction_count: 0,
+            cache_ttl_ms: None,
+            tok_rate: None,
+            ftl_ms: None,
+            todo_delta: 0,
+            plugin_styles: Vec::new(),
         }
     }
 

@@ -6,18 +6,13 @@
 //! Color escalates to yellow when FTL ≥10s (suggests Anthropic queue pressure).
 
 use crate::ansi::{DIM, RESET, YELLOW};
-use crate::config;
 use crate::context::RenderContext;
 use crate::format::{fmt_ftl, fmt_tok_rate};
 use crate::layout::{Priority, Seg};
-use crate::transcript;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
-    let tok_rate = transcript::last_turn_output_rate(&ctx.transcript).and_then(fmt_tok_rate);
-    let ftl = config::timed("ftl", ctx.cfg.debug_timing, || {
-        transcript::first_token_latency_ms(&ctx.transcript)
-    })
-    .and_then(fmt_ftl);
+    let tok_rate = ctx.tok_rate.and_then(fmt_tok_rate);
+    let ftl = ctx.ftl_ms.and_then(fmt_ftl);
 
     let mut full_bits: Vec<String> = Vec::new();
     let mut compact_bits: Vec<String> = Vec::new();

@@ -3,19 +3,12 @@
 //! ⇒ empty diff ⇒ zero delta ⇒ no signal worth showing).
 
 use crate::ansi::{DIM, GREEN, YELLOW};
-use crate::config;
 use crate::context::RenderContext;
-use crate::git;
 use crate::layout::{Priority, Seg};
 use crate::repr;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
-    if !ctx.in_repo || !ctx.git_status.dirty {
-        return None;
-    }
-    let delta = config::timed("todo-delta", ctx.cfg.debug_timing, || {
-        git::todo_delta(ctx.cwd_path())
-    });
+    let delta = ctx.todo_delta;
     if delta == 0 {
         return None;
     }

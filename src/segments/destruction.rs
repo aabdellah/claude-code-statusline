@@ -3,19 +3,12 @@
 //! Only renders inside a repo and only when count > 0.
 
 use crate::ansi::{BOLD, RED, YELLOW};
-use crate::config;
 use crate::context::RenderContext;
 use crate::layout::{Priority, Seg};
 use crate::repr;
-use crate::transcript;
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
-    if !ctx.in_repo {
-        return None;
-    }
-    let count = config::timed("destruction", ctx.cfg.debug_timing, || {
-        transcript::destruction_count(&ctx.transcript)
-    });
+    let count = ctx.destruction_count;
     if count == 0 {
         return None;
     }

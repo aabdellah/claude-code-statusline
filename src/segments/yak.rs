@@ -3,11 +3,9 @@
 //! sub-problems deep from what you actually asked for."
 
 use crate::ansi::{BOLD, DIM, GREEN, RED, YELLOW};
-use crate::config;
 use crate::context::RenderContext;
 use crate::layout::{Priority, Seg};
 use crate::repr;
-use crate::transcript;
 
 /// Tilde-pad the label so it grows visually shaggier with depth, capped at 5.
 fn yak_label(depth: u32) -> String {
@@ -17,18 +15,16 @@ fn yak_label(depth: u32) -> String {
 
 fn yak_color(depth: u32) -> String {
     match depth {
-        0..=1 => DIM.to_string(),
-        2 => GREEN.to_string(),
-        3 => YELLOW.to_string(),
-        4 => RED.to_string(),
+        0..=1 => DIM.to_owned(),
+        2 => GREEN.to_owned(),
+        3 => YELLOW.to_owned(),
+        4 => RED.to_owned(),
         _ => format!("{}{}", BOLD, RED),
     }
 }
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
-    let depth = config::timed("yak-depth", ctx.cfg.debug_timing, || {
-        transcript::yak_depth(&ctx.transcript)
-    });
+    let depth = ctx.yak_depth;
     if depth == 0 {
         return None;
     }

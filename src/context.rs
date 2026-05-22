@@ -30,12 +30,35 @@ pub struct RenderContext<'a> {
     pub git_status: GitStatus,
     pub worktree_stats: WorktreeStats,
 
-    pub transcript: Vec<serde_json::Value>,
-
     /// Cross-session today rollup (cost + tokens since local midnight). `None`
     /// when the cache hasn't been populated yet — first render of a session or
     /// just after a cache invalidation. Populated lazily by a detached refresh.
     pub today: Option<TodayRollup>,
+
+    // ─── Pre-computed transcript-derived metrics ────────────────────────────
+    // Segments read these instead of re-walking `transcript` per render.
+    // Default values (0 / None) mean "no signal" — segments treat them the
+    // same as "we didn't bother computing" because both render as empty.
+    /// Yak-shave depth at the latest transcript entry. 0 = main thread.
+    pub yak_depth: u32,
+    /// Count of destructive Bash invocations in the visible transcript tail.
+    pub destruction_count: u32,
+    /// Approximated cache TTL (ms) remaining in Anthropic's 5-minute prompt
+    /// cache window. `None` when no timestamped entries exist.
+    pub cache_ttl_ms: Option<i64>,
+    /// Output tok/s rate from the most recent assistant turn.
+    pub tok_rate: Option<f64>,
+    /// Approximate first-token latency (ms) for the most recent assistant turn.
+    pub ftl_ms: Option<f64>,
+
+    // ─── Pre-computed I/O outside transcript ────────────────────────────────
+    /// Net +/- TODO/FIXME tokens in the working-tree diff. Zero outside a
+    /// repo, on a clean tree, or when libgit2 fails — all treated as "no
+    /// signal".
+    pub todo_delta: i32,
+    /// Plugin-injected output styles (learning/explanatory). Empty unless
+    /// `STATUSLINE_SHOW_PLUGINS=1`.
+    pub plugin_styles: Vec<String>,
 }
 
 impl<'a> RenderContext<'a> {
@@ -94,6 +117,41 @@ impl<'a> RenderContext<'a> {
             transcript::read_transcript_tail(input.transcript_path.as_deref())
         });
 
+        // Transcript-derived metrics — pre-compute once so segments stay
+        // pure. All operate on the already-loaded `transcript` Vec; the
+        // O(N) walks here replace per-segment re-walks.
+        let yak_depth = config::timed("yak-depth", cfg.debug_timing, || {
+            transcript::yak_depth(&transcript)
+        });
+        let destruction_count = if in_repo {
+            config::timed("destruction", cfg.debug_timing, || {
+                transcript::destruction_count(&transcript)
+            })
+        } else {
+            0
+        };
+        let cache_ttl_ms = transcript::cache_ttl_ms_remaining(&transcript);
+        let tok_rate = transcript::last_turn_output_rate(&transcript);
+        let ftl_ms = config::timed("ftl", cfg.debug_timing, || {
+            transcript::first_token_latency_ms(&transcript)
+        });
+
+        // TODO delta — libgit2 diff walk; only relevant when the tree is
+        // actually dirty, so guard tight and skip otherwise.
+        let todo_delta = if in_repo && git_status.dirty {
+            config::timed("todo-delta", cfg.debug_timing, || git::todo_delta(&cwd))
+        } else {
+            0
+        };
+
+        // Plugin-injected output styles — reads ~/.claude/settings.json.
+        // Opt-in via STATUSLINE_SHOW_PLUGINS=1.
+        let plugin_styles = if cfg.show_plugins {
+            config::timed("plugin-styles", cfg.debug_timing, read_plugin_styles)
+        } else {
+            Vec::new()
+        };
+
         // Today's cross-session $ + tokens. Reads a /tmp cache file; spawns
         // a detached `self --refresh-today` if the cache is stale or missing.
         // Returns `None` on first run until the background refresh lands.
@@ -109,8 +167,9 @@ impl<'a> RenderContext<'a> {
             cwd, project_dir, repo_name,
             in_repo, in_worktree, branch,
             git_status, worktree_stats,
-            transcript,
             today,
+            yak_depth, destruction_count, cache_ttl_ms, tok_rate, ftl_ms,
+            todo_delta, plugin_styles,
         }
     }
 
@@ -132,4 +191,33 @@ impl<'a> RenderContext<'a> {
     pub fn cwd_path(&self) -> &Path {
         &self.cwd
     }
+}
+
+/// Read `~/.claude/settings.json` and extract any enabled plugin-injected
+/// output styles (currently "learning" and "explanatory"). I/O lives in
+/// `RenderContext::build` so segments stay pure.
+fn read_plugin_styles() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let settings_path = format!("{}/.claude/settings.json", home);
+    let Ok(content) = std::fs::read_to_string(&settings_path) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Vec::new();
+    };
+    let Some(enabled) = json.get("enabledPlugins").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let mut styles = Vec::new();
+    for (key, val) in enabled {
+        if !val.as_bool().unwrap_or(false) {
+            continue;
+        }
+        if key.starts_with("learning-output-style@") {
+            styles.push("learning".to_owned());
+        } else if key.starts_with("explanatory-output-style@") {
+            styles.push("explanatory".to_owned());
+        }
+    }
+    styles
 }
