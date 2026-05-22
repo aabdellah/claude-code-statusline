@@ -78,8 +78,12 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         return None;
     }
 
+    // Critical: rate limits are recovery-relevant — losing them on narrow
+    // terminals defeats the whole point of glanceable quota awareness.
+    // Same tier as model + context; the fitter will downgrade siblings
+    // (cost/cache/etc) before touching this segment's variants.
     Some(
-        Seg::new("rate-limits", Priority::Normal, full_bits.join(" "))
+        Seg::new("rate-limits", Priority::Critical, full_bits.join(" "))
             .with_compact(compact_bits.join(" "))
             .red_n(red_count),
     )
