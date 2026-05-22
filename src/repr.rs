@@ -95,15 +95,18 @@ mod tests {
 
     /// Strip ANSI CSI escapes — assertions on visible content are clearer
     /// than scanning byte streams that have color codes interleaved.
+    /// Iterates `chars()` not `bytes()`: visible content commonly includes
+    /// multi-byte glyphs (●, ↑, █, ·) and a byte-cast (`b as char`) would
+    /// corrupt them silently.
     fn strip(s: &str) -> String {
         let mut out = String::new();
         let mut state = 0u8;
-        for b in s.bytes() {
+        for c in s.chars() {
             match state {
-                0 if b == 0x1b => state = 1,
-                0 => out.push(b as char),
-                1 => state = if b == b'[' { 2 } else { 0 },
-                2 if (0x40..=0x7E).contains(&b) => state = 0,
+                0 if c == '\u{1b}' => state = 1,
+                0 => out.push(c),
+                1 => state = if c == '[' { 2 } else { 0 },
+                2 if matches!(c, '\u{40}'..='\u{7E}') => state = 0,
                 _ => {}
             }
         }

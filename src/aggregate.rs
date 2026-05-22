@@ -225,10 +225,15 @@ fn scan_projects(day_anchor_ms: i64) -> TodayRollup {
             // the open+parse cost entirely.
             if let Ok(meta) = path.metadata() {
                 if let Ok(modified) = meta.modified() {
+                    // try_from guard — `as i64` would silently wrap to a
+                    // negative value on pathological future mtimes (clock
+                    // skew, malicious file metadata), causing the mtime
+                    // pre-filter below to admit the file when it shouldn't.
                     let modified_ms = modified
                         .duration_since(SystemTime::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
-                        .unwrap_or(0);
+                        .ok()
+                        .and_then(|d| i64::try_from(d.as_millis()).ok())
+                        .unwrap_or(i64::MAX);
                     if modified_ms < day_anchor_ms { continue; }
                 }
             }
