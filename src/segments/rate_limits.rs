@@ -106,3 +106,84 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
             .red_n(red_count),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ansi::strip_ansi;
+    use crate::config::Config;
+    use crate::context::RenderContext;
+    use crate::input::{RateLimitWindow, RateLimits, StatusInput};
+
+    fn input_with_rate_limits(five_pct: f64, seven_pct: f64) -> StatusInput {
+        let mut input = StatusInput::default();
+        input.rate_limits = Some(RateLimits {
+            five_hour: Some(RateLimitWindow {
+                used_percentage: Some(five_pct),
+                resets_at: None,
+            }),
+            seven_day: Some(RateLimitWindow {
+                used_percentage: Some(seven_pct),
+                resets_at: None,
+            }),
+        });
+        input
+    }
+
+    #[test]
+    fn five_hour_at_90pct_red_signal() {
+        let input = input_with_rate_limits(90.0, 30.0);
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 1, "5h ≥90% contributes 1 red signal");
+    }
+
+    #[test]
+    fn seven_day_at_90pct_red_signal() {
+        let input = input_with_rate_limits(50.0, 90.0);
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        let seg = render(&ctx).expect("renders");
+        // 7d ≥90% AND no projection (no resets_at) → 1 red signal.
+        assert_eq!(seg.red_count, 1);
+    }
+
+    #[test]
+    fn both_5h_and_7d_red_stack() {
+        let input = input_with_rate_limits(95.0, 95.0);
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 2);
+    }
+
+    #[test]
+    fn no_red_when_well_under_90pct() {
+        let input = input_with_rate_limits(40.0, 50.0);
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 0);
+    }
+
+    #[test]
+    fn hidden_when_rate_limits_missing() {
+        let input = StatusInput::default();
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        assert!(render(&ctx).is_none());
+    }
+
+    #[test]
+    fn full_variant_starts_with_5h_then_7d() {
+        let input = input_with_rate_limits(20.0, 30.0);
+        let cfg = Config::from_env();
+        let ctx = RenderContext::test_default(&input, &cfg);
+        let seg = render(&ctx).expect("renders");
+        let stripped = strip_ansi(&seg.full);
+        let idx_5h = stripped.find("5h ").expect("has 5h marker");
+        let idx_7d = stripped.find("7d ").expect("has 7d marker");
+        assert!(idx_5h < idx_7d, "5h appears before 7d in full variant");
+    }
+}

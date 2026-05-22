@@ -136,3 +136,109 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     }
     Some(seg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ansi::strip_ansi;
+    use crate::config::Config;
+    use crate::context::RenderContext;
+    use crate::git::WorktreeStats;
+    use crate::input::{Pr, StatusInput};
+
+    fn ctx_with_pr<'a>(
+        input: &'a StatusInput,
+        cfg: &'a Config,
+        branch: &str,
+        worktree_stats: WorktreeStats,
+    ) -> RenderContext<'a> {
+        let mut ctx = RenderContext::test_default(input, cfg);
+        ctx.in_repo = true;
+        ctx.branch = Some(branch.to_owned());
+        ctx.repo_name = Some("demo-repo".to_owned());
+        ctx.worktree_stats = worktree_stats;
+        ctx
+    }
+
+    fn input_with_pr(num: u64, review_state: Option<&str>) -> StatusInput {
+        let mut input = StatusInput::default();
+        input.pr = Some(Pr {
+            number: Some(num),
+            review_state: review_state.map(str::to_owned),
+        });
+        input
+    }
+
+    #[test]
+    fn pr_changes_requested_contributes_red_signal() {
+        let input = input_with_pr(42, Some("CHANGES_REQUESTED"));
+        let cfg = Config::from_env();
+        let ctx = ctx_with_pr(&input, &cfg, "feat-x", WorktreeStats::default());
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 1, "CHANGES_REQUESTED is a red signal");
+        assert!(strip_ansi(&seg.full).contains("#42"));
+    }
+
+    #[test]
+    fn pr_approved_no_red_signal() {
+        let input = input_with_pr(42, Some("APPROVED"));
+        let cfg = Config::from_env();
+        let ctx = ctx_with_pr(&input, &cfg, "feat-x", WorktreeStats::default());
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 0);
+    }
+
+    #[test]
+    fn five_or_more_stale_worktrees_red() {
+        let input = StatusInput::default();
+        let cfg = Config::from_env();
+        let stats = WorktreeStats { extras: 5, stale: 5 };
+        let ctx = ctx_with_pr(&input, &cfg, "main", stats);
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 1, "≥5 stale worktrees is a red signal");
+    }
+
+    #[test]
+    fn fewer_than_five_stale_no_red() {
+        let input = StatusInput::default();
+        let cfg = Config::from_env();
+        let stats = WorktreeStats { extras: 4, stale: 4 };
+        let ctx = ctx_with_pr(&input, &cfg, "main", stats);
+        let seg = render(&ctx).expect("renders");
+        assert_eq!(seg.red_count, 0);
+    }
+
+    #[test]
+    fn worktree_marker_only_in_full_variant() {
+        let input = {
+            let mut i = StatusInput::default();
+            i.worktree = Some(crate::input::Worktree {
+                name: Some("feat".into()),
+                branch: None,
+                original_branch: Some("main".into()),
+            });
+            i
+        };
+        let cfg = Config::from_env();
+        let mut ctx = ctx_with_pr(&input, &cfg, "wt-feat", WorktreeStats::default());
+        ctx.in_worktree = true;
+        let seg = render(&ctx).expect("renders");
+        let full = strip_ansi(&seg.full);
+        let compact = strip_ansi(seg.compact.as_deref().expect("has compact"));
+        let micro = strip_ansi(seg.micro.as_deref().expect("has micro"));
+        assert!(full.contains("[wt ←main]"), "full carries worktree marker");
+        assert!(!compact.contains("[wt"), "compact omits the worktree marker");
+        assert!(!micro.contains("[wt"), "micro omits the worktree marker");
+    }
+
+    #[test]
+    fn no_repo_renders_dim_cwd_hint() {
+        let input = StatusInput::default();
+        let cfg = Config::from_env();
+        let mut ctx = RenderContext::test_default(&input, &cfg);
+        ctx.cwd = std::path::PathBuf::from("/var/log");
+        let seg = render(&ctx).expect("renders even outside repo");
+        assert_eq!(strip_ansi(&seg.full), "log");
+        assert_eq!(seg.red_count, 0);
+    }
+}

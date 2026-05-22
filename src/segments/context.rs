@@ -54,3 +54,87 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         .red_n(red_count);
     Some(seg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ansi::strip_ansi;
+    use crate::config::Config;
+    use crate::context::RenderContext;
+    use crate::input::{ContextWindow, StatusInput};
+
+    fn ctx_with_window<'a>(
+        input: &'a StatusInput,
+        cfg: &'a Config,
+    ) -> RenderContext<'a> {
+        RenderContext::test_default(input, cfg)
+    }
+
+    fn input_with_pct(used_pct: f64, size: u64, exceeds: bool) -> StatusInput {
+        let mut input = StatusInput::default();
+        input.context_window = Some(ContextWindow {
+            used_percentage: Some(used_pct),
+            context_window_size: Some(size),
+            ..ContextWindow::default()
+        });
+        input.exceeds_200k_tokens = Some(exceeds);
+        input
+    }
+
+    #[test]
+    fn hidden_when_context_window_missing() {
+        let input = StatusInput::default();
+        let cfg = Config::from_env();
+        assert!(render(&ctx_with_window(&input, &cfg)).is_none());
+    }
+
+    #[test]
+    fn below_85pct_no_red_signal() {
+        let input = input_with_pct(50.0, 1_000_000, false);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        assert_eq!(seg.red_count, 0);
+    }
+
+    #[test]
+    fn at_or_above_85pct_contributes_one_red_signal() {
+        let input = input_with_pct(85.0, 1_000_000, false);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        assert_eq!(seg.red_count, 1, "85% threshold inclusive");
+    }
+
+    #[test]
+    fn exceeds_200k_contributes_red_signal_independently() {
+        // Below 85% but exceeds — single red signal (200k only).
+        let input = input_with_pct(60.0, 1_000_000, true);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        assert_eq!(seg.red_count, 1);
+    }
+
+    #[test]
+    fn both_85pct_and_200k_stack_to_two_red_signals() {
+        let input = input_with_pct(90.0, 1_000_000, true);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        assert_eq!(seg.red_count, 2, "85% AND 200k stack independently");
+    }
+
+    #[test]
+    fn full_variant_includes_200k_marker_when_exceeded() {
+        let input = input_with_pct(50.0, 1_000_000, true);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        assert!(strip_ansi(&seg.full).contains("200k+"));
+    }
+
+    #[test]
+    fn micro_variant_is_just_the_percentage() {
+        let input = input_with_pct(63.0, 1_000_000, false);
+        let cfg = Config::from_env();
+        let seg = render(&ctx_with_window(&input, &cfg)).expect("renders");
+        let micro = seg.micro.as_deref().expect("has micro");
+        assert_eq!(strip_ansi(micro), "63%");
+    }
+}

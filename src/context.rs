@@ -191,6 +191,33 @@ impl<'a> RenderContext<'a> {
     pub fn cwd_path(&self) -> &Path {
         &self.cwd
     }
+
+    /// Test-only constructor: produces a no-I/O context with all derived
+    /// fields zeroed/None. Mutate the returned struct to set up specific
+    /// scenarios. Keeps segment unit tests boilerplate-free.
+    #[cfg(test)]
+    pub(crate) fn test_default<'b>(input: &'b StatusInput, cfg: &'b Config) -> RenderContext<'b> {
+        RenderContext {
+            input,
+            cfg,
+            cwd: std::path::PathBuf::from("/tmp"),
+            project_dir: None,
+            repo_name: None,
+            in_repo: false,
+            in_worktree: false,
+            branch: None,
+            git_status: GitStatus::default(),
+            worktree_stats: WorktreeStats::default(),
+            today: None,
+            yak_depth: 0,
+            destruction_count: 0,
+            cache_ttl_ms: None,
+            tok_rate: None,
+            ftl_ms: None,
+            todo_delta: 0,
+            plugin_styles: Vec::new(),
+        }
+    }
 }
 
 /// Read `~/.claude/settings.json` and extract any enabled plugin-injected

@@ -92,26 +92,9 @@ mod tests {
         cfg: &'a Config,
         today: Option<TodayRollup>,
     ) -> RenderContext<'a> {
-        RenderContext {
-            input,
-            cfg,
-            cwd: PathBuf::from("/tmp"),
-            project_dir: None,
-            repo_name: None,
-            in_repo: false,
-            in_worktree: false,
-            branch: None,
-            git_status: GitStatus::default(),
-            worktree_stats: WorktreeStats::default(),
-            today,
-            yak_depth: 0,
-            destruction_count: 0,
-            cache_ttl_ms: None,
-            tok_rate: None,
-            ftl_ms: None,
-            todo_delta: 0,
-            plugin_styles: Vec::new(),
-        }
+        let mut ctx = RenderContext::test_default(input, cfg);
+        ctx.today = today;
+        ctx
     }
 
     #[test]

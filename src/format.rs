@@ -457,4 +457,98 @@ mod tests {
         // it as UTC would mis-render reset countdowns by hours.
         assert_eq!(parse_rfc3339_ms("2026-01-01T00:00:00"), None);
     }
+
+    #[test]
+    fn burn_rate_thresholds() {
+        // Below 30s of session time: not stable enough to display.
+        assert_eq!(fmt_burn_rate(0.50, 10_000), None);
+        // At exactly 30s: shown. $0.50 / (30s/3600s) = $60/h.
+        assert_eq!(fmt_burn_rate(0.50, 30_000).as_deref(), Some("$60.0/h"));
+        // Below $10/h: two decimals.
+        assert_eq!(fmt_burn_rate(0.04, 3_600_000).as_deref(), Some("$0.04/h"));
+        // Below $0.01/h: floor marker.
+        assert_eq!(fmt_burn_rate(0.00001, 3_600_000).as_deref(), Some("<$0.01/h"));
+        // NaN / inf input is rejected.
+        assert_eq!(fmt_burn_rate(f64::NAN, 3_600_000), None);
+        assert_eq!(fmt_burn_rate(f64::INFINITY, 3_600_000), None);
+    }
+
+    #[test]
+    fn burn_rate_compact_drops_decimal_above_10() {
+        assert_eq!(fmt_burn_rate_compact(20.0, 3_600_000).as_deref(), Some("$20/h"));
+        assert_eq!(fmt_burn_rate_compact(5.5, 3_600_000).as_deref(), Some("$5.5/h"));
+    }
+
+    #[test]
+    fn tok_rate_kt_per_s_above_1000() {
+        // Above 1000: switches to kt/s with one decimal.
+        assert_eq!(fmt_tok_rate(1500.0).as_deref(), Some("1.5kt/s"));
+        // Below 1000: integer t/s.
+        assert_eq!(fmt_tok_rate(150.7).as_deref(), Some("151t/s"));
+        // Zero / negative / NaN: hidden.
+        assert_eq!(fmt_tok_rate(0.0), None);
+        assert_eq!(fmt_tok_rate(-5.0), None);
+        assert_eq!(fmt_tok_rate(f64::NAN), None);
+    }
+
+    #[test]
+    fn ftl_below_2s_is_noise() {
+        // Below 2000ms: our streaming-rate approximation is too noisy to show.
+        assert_eq!(fmt_ftl(1500.0), None);
+        assert_eq!(fmt_ftl(0.0), None);
+        // At 2000ms: shown with one decimal.
+        assert_eq!(fmt_ftl(2400.0).as_deref(), Some("ftl 2.4s"));
+        // ≥10s: rounded integer (decimal noise no longer meaningful).
+        assert_eq!(fmt_ftl(15_700.0).as_deref(), Some("ftl 16s"));
+        assert_eq!(fmt_ftl(f64::NAN), None);
+    }
+
+    #[test]
+    fn ttl_zero_or_negative_is_none() {
+        assert_eq!(fmt_ttl(0), None);
+        assert_eq!(fmt_ttl(-5), None);
+        // 47s → 0:47
+        assert_eq!(fmt_ttl(47_000).as_deref(), Some("0:47"));
+        // 2m 3s → 2:03 (note zero-pad on seconds)
+        assert_eq!(fmt_ttl(123_000).as_deref(), Some("2:03"));
+    }
+
+    #[test]
+    fn lines_per_api_min_decimal_below_10() {
+        // Below 30s api time: hidden (not stable).
+        assert_eq!(fmt_lines_per_api_min(100, 10_000), None);
+        // 0 lines: hidden.
+        assert_eq!(fmt_lines_per_api_min(0, 60_000), None);
+        // <10 lpm: one decimal place. 50 lines / 10min = 5.0 lpm.
+        assert_eq!(fmt_lines_per_api_min(50, 600_000).as_deref(), Some("lpm 5.0"));
+        // ≥10 lpm: integer. 200 lines / 10min = 20 lpm.
+        assert_eq!(fmt_lines_per_api_min(200, 600_000).as_deref(), Some("lpm 20"));
+    }
+
+    #[test]
+    fn reset_time_returns_empty_for_past() {
+        // Past timestamp: returns empty string (matches Node behavior — empty
+        // is falsy and the segment skips rendering).
+        let past = serde_json::Value::from(0);
+        assert_eq!(fmt_reset_time(&past), "");
+    }
+
+    #[test]
+    fn reset_time_renders_hours_and_minutes() {
+        // 2h 5m from now.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let target = serde_json::Value::from(now + 2 * 3600 + 5 * 60);
+        assert_eq!(fmt_reset_time(&target), "2h5m");
+
+        // Just minutes (<60).
+        let target2 = serde_json::Value::from(now + 47 * 60);
+        assert_eq!(fmt_reset_time(&target2), "47m");
+
+        // Whole hours collapse to "Nh" (no trailing 0m).
+        let target3 = serde_json::Value::from(now + 3 * 3600);
+        assert_eq!(fmt_reset_time(&target3), "3h");
+    }
 }
