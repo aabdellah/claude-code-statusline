@@ -19,6 +19,7 @@ mod render;
 mod repr;
 mod segments;
 mod transcript;
+mod usage;
 mod width;
 
 use std::io::{self, Read, Write};

@@ -10,7 +10,7 @@ For shipped segments + backlog, see docs/ROADMAP.md.
 
 ```bash
 cargo build --release          # ~30s first time (libgit2 vendored), then incremental
-cargo test --release           # 47 tests; runs in <1s
+cargo test --release           # 120+ tests; runs in <1s
 cargo run -q                   # local invocation; pipe JSON to stdin
 
 # After source edits if the LaunchAgent isn't running:
@@ -58,6 +58,37 @@ cargo build --release
   totals. Anything that divides cumulative lines by these will produce
   nonsense. Use `cost.total_api_duration_ms` for cumulative-API-time
   productivity instead.
+
+- **Fable 5's dedicated limit is the `seven_day_overage_included` window —
+  and CC does NOT forward it to the statusline yet.** Verified against the
+  v2.1.201 binary (strings + minified JS): CC parses four windows from the
+  `anthropic-ratelimit-unified-{5h,7d,7d_oi,overage}-utilization/-reset`
+  response headers; `7d_oi` = `seven_day_overage_included`, UI label
+  "Fable 5 limit" ("overage included" because Fable usage can spill into
+  usage credits). The statusline payload builder whitelists ONLY
+  `five_hour` and `seven_day` — the Fable window never reaches stdin as of
+  2.1.201, even though it sits in the same live header-parsed state the
+  payload is built from (one whitelist line away). `seven_day_opus` /
+  `seven_day_sonnet` are a step further out: CC never parses those from
+  headers at all — they exist only as rateLimitType enum values and as
+  oauth-usage fields, so our key names for them are guesses. We parse +
+  render all three anyway (drift-proof: each window deserializes leniently,
+  so a wrong-shaped key nulls only itself).
+  Until CC forwards them, `src/usage.rs` BRIDGES the gap: the detached
+  refresh process fetches the oauth usage endpoint and caches the scoped
+  windows; the segment falls back to that cache for windows stdin doesn't
+  carry (stdin always wins when present). If the fable segment is missing,
+  check `/tmp/cc-statusline-usage.json` freshness and a
+  `STATUSLINE_DUMP_INPUT=1` dump before touching parsing — the data
+  genuinely isn't in the stdin input. The richer
+  source CC itself uses for `/usage` is `GET /api/oauth/usage` (OAuth).
+  Its response is FLAT — no `rate_limits` envelope (that's CC's internal
+  aggregate name, not the wire shape): top-level `five_hour`, `seven_day`,
+  `seven_day_opus`, `seven_day_sonnet`, `seven_day_oauth_apps`,
+  `cinder_cove`, `extra_usage`, and `limits[]` entries of
+  `{kind: "weekly_scoped", scope: {model: {display_name}}, percent, resets_at}`
+  (the `/usage` panel renders five_hour + seven_day + seven_day_sonnet +
+  the weekly_scoped limits).
 
 - **`git2` MUST be `default-features = false, features = ["vendored-libgit2"]`.**
   Without `vendored-libgit2`, `git2-sys` finds brew's system libgit2 via
@@ -138,8 +169,29 @@ cargo build --release
   investigating one session's render. Always use the per-session file when
   diagnosing a specific session.
 
+- **`STATUSLINE_USAGE_SOURCE=off`** disables the oauth usage fetch AND its
+  rendering (the Fable dedicated weekly sourced from `GET /api/oauth/usage`).
+  Note the value is `off`, not pricing's `offline` — the semantics differ:
+  `off` kills fetch *and* the cache read/render; pricing's `offline` only
+  stops new network calls (a prior cache is still consulted). The fetch runs
+  in the detached refresh process only: OAuth token from
+  `~/.claude/.credentials.json` (macOS keychain item "Claude Code-credentials"
+  as fallback, tried when the file has no live token), validated against the
+  JWT/base64url charset, then passed to curl via stdin config — NEVER argv
+  (`ps` leaks argv to every local process) — and never written to disk.
+  `curl`/`security` are invoked by absolute path (no PATH hijack). State
+  (cache of scoped windows — usage % + reset times — and the retry marker)
+  lives in a PER-USER private dir (`$TMPDIR`, else `~/.cache/cc-statusline`
+  at 0700), 0600 files, NOT world-writable `/tmp`: the data is
+  account-specific, so a shared path would leak/spoof across users and
+  expose fixed paths to symlink-clobber. 120s TTL, 10min failed-attempt
+  throttle, 15min max render age. Expired tokens are skipped, not refreshed
+  — CC rewrites the credentials file as it refreshes, and the next cycle
+  picks the new token up.
+
 - **`STATUSLINE_PRICING_SOURCE=offline`** disables the LiteLLM pricing
-  fetch and forces the embedded Claude 4-family constants for the
+  fetch and forces the embedded Claude-family constants (Fable/Opus/Sonnet/
+  Haiku) for the
   cross-session today rollup. The cache file (`/tmp/cc-statusline-pricing.json`)
   is still consulted if present — "offline" means "don't make new network
   calls," not "ignore any prior cache." For airgapped builds also pass
@@ -147,7 +199,7 @@ cargo build --release
   `raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
   with 24h TTL and a 1h failed-attempt throttle. Filters by
   `litellm_provider == "anthropic"`; unknown models fall back to family
-  substring match (opus/sonnet/haiku), then to `None` (tokens still
+  substring match (fable/mythos/opus/sonnet/haiku), then to `None` (tokens still
   counted, $ skipped).
 
 - **Embedded pricing constants drift fast.** When live pricing first

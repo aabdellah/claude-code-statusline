@@ -87,6 +87,10 @@ pub fn run_refresh_today() {
     // process so it doesn't affect render latency.
     pricing::ensure_loaded_sync();
 
+    // Same deal for the oauth usage fetch (Fable dedicated weekly limit —
+    // not in the statusline stdin as of CC v2.1.201, see CLAUDE.md).
+    crate::usage::refresh_sync();
+
     let Some(day_anchor) = local_midnight_utc_ms() else { return };
     let rollup = scan_projects(day_anchor);
     if let Some(tmp_path) = write_tmp_file(&rollup) {

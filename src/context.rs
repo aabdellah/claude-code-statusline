@@ -59,6 +59,11 @@ pub struct RenderContext<'a> {
     /// Plugin-injected output styles (learning/explanatory). Empty unless
     /// `STATUSLINE_SHOW_PLUGINS=1`.
     pub plugin_styles: Vec<String>,
+
+    /// Model-scoped weekly rate-limit windows from the oauth usage cache
+    /// (Fable dedicated weekly et al). Fallback source only — stdin's
+    /// `rate_limits` wins whenever it carries the same window.
+    pub oauth_scoped: crate::usage::ScopedWindows,
 }
 
 impl<'a> RenderContext<'a> {
@@ -157,6 +162,15 @@ impl<'a> RenderContext<'a> {
         // Returns `None` on first run until the background refresh lands.
         let today = config::timed("today-rollup", cfg.debug_timing, aggregate::read_today);
 
+        // Fable dedicated weekly (+ other scoped windows) from the oauth
+        // usage cache — CC doesn't put these in stdin yet. Pure file read;
+        // the fetch lives in the detached refresh process.
+        let oauth_scoped = config::timed(
+            "oauth-usage",
+            cfg.debug_timing,
+            crate::usage::read_scoped_windows,
+        );
+
         // `gitdir` is computed only to derive `branch` — segments don't
         // need it directly today. If a future segment wants it, add it back
         // as a field and propagate through the build.
@@ -169,7 +183,7 @@ impl<'a> RenderContext<'a> {
             git_status, worktree_stats,
             today,
             yak_depth, destruction_count, cache_ttl_ms, tok_rate, ftl_ms,
-            todo_delta, plugin_styles,
+            todo_delta, plugin_styles, oauth_scoped,
         }
     }
 
@@ -222,6 +236,7 @@ impl<'a> RenderContext<'a> {
             ftl_ms: None,
             todo_delta: 0,
             plugin_styles: Vec::new(),
+            oauth_scoped: crate::usage::ScopedWindows::default(),
         }
     }
 }

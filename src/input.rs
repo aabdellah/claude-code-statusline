@@ -124,11 +124,50 @@ pub struct OutputStyle {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct RateLimits {
+    #[serde(deserialize_with = "lenient_window", default)]
     pub five_hour: Option<RateLimitWindow>,
+    #[serde(deserialize_with = "lenient_window", default)]
     pub seven_day: Option<RateLimitWindow>,
+    /// Fable 5's DEDICATED weekly limit. The wire key comes from CC's internal
+    /// rate-limit state, where this window is labeled "Fable 5 limit" and fed
+    /// by the `anthropic-ratelimit-unified-7d_oi-*` response headers
+    /// ("overage included" — Fable usage can spill into usage credits).
+    /// As of CC v2.1.201 the statusline payload builder does NOT forward it
+    /// (only five_hour/seven_day) — parsed here so the segment lights up the
+    /// moment CC ships it. This window is one whitelist line away in CC: it
+    /// already sits in the live header-parsed state the payload is built
+    /// from. See the CLAUDE.md gotcha for the verification trail.
+    #[serde(deserialize_with = "lenient_window", default)]
+    pub seven_day_overage_included: Option<RateLimitWindow>,
+    /// Model-scoped weekly windows (CC labels "Opus limit" / "Sonnet limit").
+    /// More speculative than the Fable window: CC never parses these from
+    /// utilization headers — they exist only as rateLimitType enum values in
+    /// 429/warning events and as fields of `GET /api/oauth/usage`. The key
+    /// names here are our best guess at CC's eventual statusline naming.
+    #[serde(deserialize_with = "lenient_window", default)]
+    pub seven_day_opus: Option<RateLimitWindow>,
+    #[serde(deserialize_with = "lenient_window", default)]
+    pub seven_day_sonnet: Option<RateLimitWindow>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+/// Deserialize one rate-limit window, swallowing shape drift to `None`.
+/// Without this, a single window arriving as a bool/number/array would fail
+/// the whole `RateLimits` deserialization and `parse_lenient` would blank
+/// the entire `rate_limits` slot — hiding the working 5h/7d segments too
+/// (the `workspace.git_worktree` all-or-nothing bug pattern, one nesting
+/// level down). Matters most for the scoped-window keys above, whose wire
+/// shapes are unverified until CC actually ships them.
+fn lenient_window<'de, D>(d: D) -> Result<Option<RateLimitWindow>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).ok())
+}
+
+// Serialize + Clone: usage.rs persists these into its /tmp cache in the
+// same shape and hands owned copies to the render context.
+#[derive(Debug, Default, Clone, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct RateLimitWindow {
     pub used_percentage: Option<f64>,
@@ -281,6 +320,53 @@ mod tests {
             s.workspace.as_ref().unwrap().git_worktree.as_deref(),
             Some("feat-x")
         );
+    }
+
+    #[test]
+    fn parses_fable_dedicated_weekly_window() {
+        // seven_day_overage_included = the Fable 5 dedicated weekly limit.
+        // CC doesn't forward it to the statusline yet (v2.1.201); this locks
+        // in the wire key so support is live the moment it ships.
+        let json = br#"{"rate_limits": {
+            "five_hour": {"used_percentage": 10},
+            "seven_day": {"used_percentage": 40},
+            "seven_day_overage_included": {"used_percentage": 72, "resets_at": 4000000000},
+            "seven_day_opus": {"used_percentage": 5},
+            "seven_day_sonnet": {"used_percentage": 6}
+        }}"#;
+        let s = StatusInput::parse_lenient(json);
+        let rl = s.rate_limits.unwrap();
+        let fable = rl.seven_day_overage_included.unwrap();
+        assert_eq!(fable.used_percentage, Some(72.0));
+        assert!(fable.resets_at.unwrap().is_number());
+        assert_eq!(rl.seven_day_opus.unwrap().used_percentage, Some(5.0));
+        assert_eq!(rl.seven_day_sonnet.unwrap().used_percentage, Some(6.0));
+        // The two original windows still parse alongside the new ones.
+        assert_eq!(rl.five_hour.unwrap().used_percentage, Some(10.0));
+        assert_eq!(rl.seven_day.unwrap().used_percentage, Some(40.0));
+    }
+
+    #[test]
+    fn drifted_window_shape_nulls_only_that_window() {
+        // The scoped-window wire shapes are unverified guesses until CC ships
+        // them. If one arrives as a non-object (bool/string/number), only
+        // that window may disappear — the working 5h/7d windows must survive.
+        // (A numeric ARRAY is the one non-object shape serde still accepts:
+        // derived struct deserializers map sequences positionally.)
+        let json = br#"{"rate_limits": {
+            "five_hour": {"used_percentage": 10},
+            "seven_day": {"used_percentage": 40},
+            "seven_day_overage_included": true,
+            "seven_day_opus": "heavy",
+            "seven_day_sonnet": 42
+        }}"#;
+        let s = StatusInput::parse_lenient(json);
+        let rl = s.rate_limits.expect("rate_limits slot survives");
+        assert_eq!(rl.five_hour.unwrap().used_percentage, Some(10.0));
+        assert_eq!(rl.seven_day.unwrap().used_percentage, Some(40.0));
+        assert!(rl.seven_day_overage_included.is_none());
+        assert!(rl.seven_day_opus.is_none());
+        assert!(rl.seven_day_sonnet.is_none());
     }
 
     #[test]

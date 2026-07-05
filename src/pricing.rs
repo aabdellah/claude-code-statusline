@@ -11,7 +11,7 @@
 //!      resulting HashMap for O(1) lookups (exact id, then date-stripped id).
 //!   4. On any lookup miss (empty cache, parse error, unknown model, or
 //!      `STATUSLINE_PRICING_SOURCE=offline`), falls back to embedded
-//!      Claude 4-family constants — partial signal beats blank cost.
+//!      Claude-family constants — partial signal beats blank cost.
 //!
 //! The render hot path (`read_today` → rollup cache read) NEVER touches
 //! pricing. All pricing cost lives in the detached refresh process.
@@ -50,9 +50,9 @@ pub struct Pricing {
     pub cache_write_1h_per_m: f64,
 }
 
-// Embedded Claude 4-family approximations. Used when live pricing is
-// unavailable, the cache is empty, the requested model isn't in LiteLLM,
-// or the user has set STATUSLINE_PRICING_SOURCE=offline.
+// Embedded Claude-family approximations (Fable 5 + Claude 4 tiers). Used
+// when live pricing is unavailable, the cache is empty, the requested model
+// isn't in LiteLLM, or the user has set STATUSLINE_PRICING_SOURCE=offline.
 const OPUS_FALLBACK: Pricing = Pricing {
     input_per_m: 15.0,
     output_per_m: 75.0,
@@ -73,6 +73,15 @@ const HAIKU_FALLBACK: Pricing = Pricing {
     cache_read_per_m: 0.08,
     cache_write_5m_per_m: 1.00,
     cache_write_1h_per_m: 1.60,
+};
+// Fable 5 / Mythos 5 (same underlying model + pricing). Matches the live
+// LiteLLM `claude-fable-5` entry as of 2026-07: $10/$50 per MTok.
+const FABLE_FALLBACK: Pricing = Pricing {
+    input_per_m: 10.0,
+    output_per_m: 50.0,
+    cache_read_per_m: 1.0,
+    cache_write_5m_per_m: 12.5,
+    cache_write_1h_per_m: 20.0,
 };
 
 #[derive(Debug, Deserialize)]
@@ -189,6 +198,7 @@ pub fn lookup(model: &str) -> Option<Pricing> {
         }
     }
 
+    if target.contains("fable") || target.contains("mythos") { return Some(FABLE_FALLBACK); }
     if target.contains("opus") { return Some(OPUS_FALLBACK); }
     if target.contains("sonnet") { return Some(SONNET_FALLBACK); }
     if target.contains("haiku") { return Some(HAIKU_FALLBACK); }
@@ -291,8 +301,19 @@ mod tests {
     }
 
     #[test]
+    fn family_fallback_covers_fable_and_mythos() {
+        // "fable"/"mythos" contain no "opus"/"sonnet"/"haiku" substring —
+        // without a dedicated branch these would fall to None and Fable
+        // sessions would silently drop $ from the today rollup.
+        let p = lookup("claude-fable-99-99999999").unwrap();
+        assert!(p.input_per_m > 5.0 && p.input_per_m < 50.0);
+        assert!(p.output_per_m > p.input_per_m);
+        assert!(lookup("claude-mythos-99-99999999").is_some());
+    }
+
+    #[test]
     fn family_fallback_returns_none_for_non_claude() {
-        // No "opus"/"sonnet"/"haiku" substring → None.
+        // No "fable"/"mythos"/"opus"/"sonnet"/"haiku" substring → None.
         // Caller should still count tokens but skip $.
         // We can't easily assert this because if PARSED happens to be
         // populated from a previous test run, exact-match might still

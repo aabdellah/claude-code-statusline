@@ -50,6 +50,7 @@ where it lives.
 |---|---|---|
 | 5h limit + reset time | `src/format.rs` :: `fmt_reset_time` | `5h 30%→2h15m` |
 | 7d limit + pace projection | `src/pace.rs` :: `seven_day_pace` | Asymmetric 92-105% green band; needs ≥10% of window elapsed |
+| Fable 5 dedicated weekly (+ Opus/Sonnet scoped) | `src/segments/rate_limits.rs` :: `weekly_window` + `src/usage.rs` | `fable 42% →98%` / `f5:42/98`; same pace math as 7d, but no underpace red (idle scoped windows aren't a problem). Sourced from `rate_limits.seven_day_overage_included` when CC forwards it (not yet as of v2.1.201 — see CLAUDE.md gotcha); until then bridged from `GET /api/oauth/usage` via the detached refresh (cache `/tmp/cc-statusline-usage.json`, 120s TTL; opt out `STATUSLINE_USAGE_SOURCE=off`). |
 | Cache hit % | `src/render.rs` | From `cw.current_usage` cache_read/create |
 | Cache TTL countdown | `src/transcript.rs` :: `cache_ttl_ms_remaining` | 5min window from last timestamped transcript entry |
 | Cost (total) | `src/format.rs` :: `fmt_money` | `$1.23` / `$24` / `$1.0k` (compact) |
