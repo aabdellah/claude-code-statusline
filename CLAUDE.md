@@ -90,6 +90,15 @@ cargo build --release
   (the `/usage` panel renders five_hour + seven_day + seven_day_sonnet +
   the weekly_scoped limits).
 
+- **Both OAuth credential stores can hold LIVE tokens for DIFFERENT
+  accounts at once.** `/login` to another account rewrites only the store CC
+  is configured for; the abandoned store's token stays unexpired for hours.
+  Preferring the file whenever its token was unexpired made the fable limit
+  render the PREVIOUS account's quota until that token died. Only CC
+  refreshes tokens, and only in the active store — so the live token with
+  the later `expiresAt` is the active account's. Any future credential read
+  must use `usage::select_token`'s rule, never "file first".
+
 - **`git2` MUST be `default-features = false, features = ["vendored-libgit2"]`.**
   Without `vendored-libgit2`, `git2-sys` finds brew's system libgit2 via
   pkg-config and dynamic-links to it, breaking the "self-contained
@@ -174,9 +183,10 @@ cargo build --release
   Note the value is `off`, not pricing's `offline` — the semantics differ:
   `off` kills fetch *and* the cache read/render; pricing's `offline` only
   stops new network calls (a prior cache is still consulted). The fetch runs
-  in the detached refresh process only: OAuth token from
-  `~/.claude/.credentials.json` (macOS keychain item "Claude Code-credentials"
-  as fallback, tried when the file has no live token), validated against the
+  in the detached refresh process only: OAuth token from whichever of
+  `~/.claude/.credentials.json` / macOS keychain item "Claude Code-credentials"
+  holds the live token with the LATER `expiresAt` (see the two-store gotcha
+  below), validated against the
   JWT/base64url charset, then passed to curl via stdin config — NEVER argv
   (`ps` leaks argv to every local process) — and never written to disk.
   `curl`/`security` are invoked by absolute path (no PATH hijack). State
@@ -185,7 +195,10 @@ cargo build --release
   at 0700), 0600 files, NOT world-writable `/tmp`: the data is
   account-specific, so a shared path would leak/spoof across users and
   expose fixed paths to symlink-clobber. 120s TTL, 10min failed-attempt
-  throttle, 15min max render age. Expired tokens are skipped, not refreshed
+  throttle, 15min max render age; cache AND retry marker are stamped with
+  `oauthAccount.accountUuid` (from `~/.claude.json`) and a stamp mismatch
+  voids both, so a `/login` refetches immediately as the new account.
+  Expired tokens are skipped, not refreshed
   — CC rewrites the credentials file as it refreshes, and the next cycle
   picks the new token up.
 

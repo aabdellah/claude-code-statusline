@@ -14,8 +14,13 @@
 //!   2. `read_scoped_windows()` (render hot path) reads that cache if it's
 //!      recent enough; pure file read, no network, no subprocess.
 //!
-//! Token handling: read from `~/.claude/.credentials.json`, falling back to
-//! the macOS keychain item CC uses when configured for it. The token is
+//! Token handling: BOTH stores (`~/.claude/.credentials.json` and the macOS
+//! keychain item) are read and the live token with the LATER `expiresAt`
+//! wins. The stores can disagree: `/login` to a different account rewrites
+//! only the store CC is configured for, and the abandoned store's token
+//! stays unexpired for hours — "file first" rendered the PREVIOUS account's
+//! quota until that token died. CC keeps refreshing only the active store,
+//! so the later expiry always identifies the active account. The token is
 //! passed to curl via a stdin config — NEVER argv (argv is visible to every
 //! local process via `ps`) — and never written to disk. Its charset is
 //! validated before interpolation so a tampered credentials file can't
@@ -30,6 +35,13 @@
 //! another user spoof the display, and expose the fixed paths to
 //! symlink-clobber attacks. Files are written 0600 and the tmp file uses
 //! `create_new` (O_EXCL) so a planted symlink is never followed.
+//!
+//! The cache and the attempt marker are STAMPED with the active account
+//! (`oauthAccount.accountUuid` from `~/.claude.json`, which CC rewrites on
+//! `/login`). A stamp mismatch makes the cache unrenderable and unfresh
+//! (immediate refetch as the new account) and voids the retry throttle —
+//! without this, the old account's numbers kept rendering for up to
+//! MAX_RENDER_AGE after a login, or RETRY_THROTTLE longer.
 //!
 //! Opt out with `STATUSLINE_USAGE_SOURCE=off` (no fetch, no render).
 //!
@@ -80,8 +92,64 @@ pub struct ScopedWindows {
     pub sonnet: Option<crate::input::RateLimitWindow>,
 }
 
+/// On-disk cache shape: the fetched windows stamped with the account they
+/// belong to. Pre-stamp cache files (bare `ScopedWindows`) deserialize with
+/// `account: None` and empty windows — treated as another account's data
+/// whenever the current account is known.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct UsageCache {
+    account: Option<String>,
+    windows: ScopedWindows,
+}
+
 fn source_off() -> bool {
     std::env::var("STATUSLINE_USAGE_SOURCE").is_ok_and(|v| v == "off")
+}
+
+/// `~/.claude.json` accumulates per-project history without bound; past this
+/// size, skip the account check rather than tokenize megabytes on the render
+/// path. Both render and refresh use the same rule, so an over-cap file
+/// degrades consistently to the unstamped (`None == None`) behavior.
+const ACCOUNT_FILE_MAX: u64 = 4 * 1024 * 1024;
+
+/// The active account per CC's own record: `oauthAccount.accountUuid` in
+/// `~/.claude.json`, rewritten by CC on `/login`. `None` when the file or
+/// field is unavailable — stamping then degrades to `None == None`, i.e.
+/// pre-account-uuid environments keep the old unstamped behavior. Runs once
+/// per render: deserialized into two thin structs (no `Value` tree of the
+/// whole file) and capped at ACCOUNT_FILE_MAX.
+fn current_account() -> Option<String> {
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct OauthAccount {
+        #[serde(rename = "accountUuid")]
+        account_uuid: Option<String>,
+    }
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct ClaudeJson {
+        #[serde(rename = "oauthAccount")]
+        oauth_account: Option<OauthAccount>,
+    }
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{home}/.claude.json");
+    if fs::metadata(&path).ok()?.len() > ACCOUNT_FILE_MAX {
+        return None;
+    }
+    let bytes = fs::read(&path).ok()?;
+    let parsed: ClaudeJson = serde_json::from_slice(&bytes).ok()?;
+    parsed.oauth_account?.account_uuid
+}
+
+/// Decode a cache blob, yielding its windows only when it belongs to
+/// `current`. Unparseable bytes or a foreign/legacy stamp → `None`.
+fn parse_cache(bytes: &[u8], current: Option<&str>) -> Option<ScopedWindows> {
+    let cache: UsageCache = serde_json::from_slice(bytes).ok()?;
+    if cache.account.as_deref() != current {
+        return None;
+    }
+    Some(cache.windows)
 }
 
 /// Per-user private state directory, resolved once. Prefers `$TMPDIR`
@@ -166,9 +234,10 @@ pub fn read_scoped_windows() -> ScopedWindows {
     if !fresh(&path, MAX_RENDER_AGE) {
         return ScopedWindows::default();
     }
+    let current = current_account();
     fs::read(&path)
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|b| parse_cache(&b, current.as_deref()))
         .unwrap_or_default()
 }
 
@@ -179,40 +248,83 @@ pub fn refresh_sync() {
         return;
     }
     let (Some(cache), Some(attempt)) = (cache_path(), attempt_path()) else { return };
-    if fresh(&cache, TTL) || fresh(&attempt, RETRY_THROTTLE) {
+    let current = current_account();
+    if skip_refresh(
+        fs::read(&cache).ok().as_deref(),
+        fresh(&cache, TTL),
+        fs::read(&attempt).ok().as_deref(),
+        fresh(&attempt, RETRY_THROTTLE),
+        current.as_deref(),
+    ) {
         return;
     }
-    match try_refresh(&cache) {
+    match try_refresh(&cache, current.as_deref()) {
         Some(()) => {
             let _ = fs::remove_file(&attempt);
         }
         None => {
-            let _ = write_private(&attempt, b"");
+            let _ = write_private(&attempt, current.as_deref().unwrap_or("").as_bytes());
         }
     }
 }
 
-fn try_refresh(cache: &std::path::Path) -> Option<()> {
+/// Whether the refresh can be skipped this cycle. Freshness only counts for
+/// THIS account's files: after a /login the old account's cache must refetch
+/// immediately, and its failed-attempt marker must not delay the new
+/// account's first fetch (the marker holds the uuid of the account that
+/// failed; empty = account unknown at the time).
+fn skip_refresh(
+    cache_bytes: Option<&[u8]>,
+    cache_fresh: bool,
+    attempt_bytes: Option<&[u8]>,
+    attempt_fresh: bool,
+    current: Option<&str>,
+) -> bool {
+    let cache_current = cache_bytes.is_some_and(|b| parse_cache(b, current).is_some());
+    let attempt_current = attempt_bytes.is_some_and(|b| b == current.unwrap_or("").as_bytes());
+    (cache_current && cache_fresh) || (attempt_current && attempt_fresh)
+}
+
+fn try_refresh(cache: &std::path::Path, account: Option<&str>) -> Option<()> {
     let token = load_oauth_token()?;
     let body = fetch(&token)?;
-    let scoped = normalize(&body)?;
+    let windows = normalize(&body)?;
     // An account without scoped windows writes an empty cache — that
     // memoizes "nothing there" for a TTL instead of refetching each cycle.
+    let scoped = UsageCache { account: account.map(str::to_owned), windows };
     let bytes = serde_json::to_vec(&scoped).ok()?;
     write_private(cache, &bytes)
 }
 
-/// CC's OAuth access token: try `~/.claude/.credentials.json` first, then
-/// the macOS keychain item CC uses when its "store in keychain" setting is
-/// on. Each source is only accepted if it yields an unexpired token, so a
-/// stale/expired credentials FILE doesn't shadow a valid KEYCHAIN token.
-/// Returns None when neither source has a live token — CC rewrites the
-/// credentials as it refreshes, so a later cycle picks up the new token.
+/// CC's OAuth access token, from whichever store holds the ACTIVE account's
+/// credentials. Returns None when neither source has a live token — CC
+/// rewrites the credentials as it refreshes, so a later cycle picks up the
+/// new token.
 fn load_oauth_token() -> Option<String> {
-    credentials_file()
-        .as_ref()
-        .and_then(valid_token)
-        .or_else(|| keychain_credentials().as_ref().and_then(valid_token))
+    select_token(credentials_file().as_ref(), keychain_credentials().as_ref())
+}
+
+/// Pick between the credentials-file and keychain blobs: the live token with
+/// the later `expiresAt` wins. A `/login` to another account rewrites only
+/// the store CC is configured for; the abandoned store's token can stay
+/// unexpired for hours, so "file first" served the previous account. Only CC
+/// refreshes tokens, and only for the active store — later expiry ⇒ active
+/// account.
+fn select_token(
+    file: Option<&serde_json::Value>,
+    keychain: Option<&serde_json::Value>,
+) -> Option<String> {
+    let candidate = |creds: Option<&serde_json::Value>| -> Option<(f64, String)> {
+        let creds = creds?;
+        let token = valid_token(creds)?;
+        let expires_at = creds.pointer("/claudeAiOauth/expiresAt")?.as_f64()?;
+        Some((expires_at, token))
+    };
+    match (candidate(file), candidate(keychain)) {
+        (Some((fe, ft)), Some((ke, kt))) => Some(if ke > fe { kt } else { ft }),
+        (Some((_, t)), None) | (None, Some((_, t))) => Some(t),
+        (None, None) => None,
+    }
 }
 
 /// Extract a live, well-formed access token from a parsed credentials blob.
@@ -442,5 +554,110 @@ mod tests {
     #[test]
     fn valid_token_rejects_empty() {
         assert!(valid_token(&creds("", far_future())).is_none());
+    }
+
+    #[test]
+    fn select_token_prefers_later_expiry_either_direction() {
+        // After /login switches accounts, the store CC stopped writing keeps
+        // a live token for hours — the ACTIVE account's store is the one CC
+        // keeps refreshing, i.e. the later expiresAt. "File first" showed the
+        // previous account's usage until its token finally expired.
+        let older = creds("oldaccount", far_future());
+        let newer = creds("newaccount", far_future() + 60_000);
+        assert_eq!(
+            select_token(Some(&older), Some(&newer)).as_deref(),
+            Some("newaccount"),
+            "keychain newer than file"
+        );
+        assert_eq!(
+            select_token(Some(&newer), Some(&older)).as_deref(),
+            Some("newaccount"),
+            "file newer than keychain"
+        );
+    }
+
+    #[test]
+    fn select_token_single_source_and_none() {
+        let only = creds("solo", far_future());
+        assert_eq!(select_token(Some(&only), None).as_deref(), Some("solo"));
+        assert_eq!(select_token(None, Some(&only)).as_deref(), Some("solo"));
+        assert!(select_token(None, None).is_none());
+    }
+
+    #[test]
+    fn select_token_skips_dead_source_regardless_of_expiry_ordering() {
+        // An expired token never wins, even with the later expiresAt absent
+        // or the live token's expiry being "earlier" than a bogus future one
+        // paired with an invalid charset.
+        let expired = creds("deadtoken", 0);
+        let live = creds("livetoken", far_future());
+        assert_eq!(select_token(Some(&expired), Some(&live)).as_deref(), Some("livetoken"));
+        let bad_charset = creds("to ken\"", far_future() + 999_000);
+        assert_eq!(select_token(Some(&bad_charset), Some(&live)).as_deref(), Some("livetoken"));
+    }
+
+    #[test]
+    fn parse_cache_rejects_other_accounts_data() {
+        let cache = UsageCache {
+            account: Some("uuid-old".into()),
+            windows: normalize(LIVE_SHAPE).unwrap(),
+        };
+        let bytes = serde_json::to_vec(&cache).unwrap();
+        assert!(parse_cache(&bytes, Some("uuid-new")).is_none(), "other account");
+        assert!(parse_cache(&bytes, None).is_none(), "account no longer known");
+        let windows = parse_cache(&bytes, Some("uuid-old")).expect("same account renders");
+        assert_eq!(windows.fable.unwrap().used_percentage, Some(7.0));
+    }
+
+    #[test]
+    fn parse_cache_unstamped_matches_only_unknown_account() {
+        // account: None (no ~/.claude.json) round-trips against None.
+        let cache = UsageCache { account: None, windows: normalize(LIVE_SHAPE).unwrap() };
+        let bytes = serde_json::to_vec(&cache).unwrap();
+        assert!(parse_cache(&bytes, None).is_some());
+        assert!(parse_cache(&bytes, Some("uuid-new")).is_none());
+    }
+
+    #[test]
+    fn parse_cache_legacy_format_never_renders_under_known_account() {
+        // Pre-stamp cache files are a bare ScopedWindows object — after an
+        // account switch they hold the OLD account's numbers, so a known
+        // current account must discard them (one-time refetch on upgrade).
+        let legacy = serde_json::to_vec(&normalize(LIVE_SHAPE).unwrap()).unwrap();
+        assert!(parse_cache(&legacy, Some("uuid-new")).is_none());
+    }
+
+    fn stamped_cache(account: Option<&str>) -> Vec<u8> {
+        let cache = UsageCache {
+            account: account.map(str::to_owned),
+            windows: normalize(LIVE_SHAPE).unwrap(),
+        };
+        serde_json::to_vec(&cache).unwrap()
+    }
+
+    #[test]
+    fn skip_refresh_honors_only_this_accounts_fresh_state() {
+        let mine = stamped_cache(Some("me"));
+        let theirs = stamped_cache(Some("them"));
+        // Fresh cache: skippable only when it's the current account's.
+        assert!(skip_refresh(Some(&mine), true, None, false, Some("me")));
+        assert!(!skip_refresh(Some(&theirs), true, None, false, Some("me")), "post-/login refetch");
+        assert!(!skip_refresh(Some(&mine), false, None, false, Some("me")), "stale cache refetches");
+        // Legacy unstamped cache never counts as fresh under a known account.
+        let legacy = serde_json::to_vec(&normalize(LIVE_SHAPE).unwrap()).unwrap();
+        assert!(!skip_refresh(Some(&legacy), true, None, false, Some("me")));
+    }
+
+    #[test]
+    fn skip_refresh_throttles_failures_per_account() {
+        // A fresh failed-attempt marker throttles only the account that
+        // failed; a /login must not inherit the old account's back-off.
+        assert!(skip_refresh(None, false, Some(b"me"), true, Some("me")));
+        assert!(!skip_refresh(None, false, Some(b"them"), true, Some("me")), "new login retries now");
+        assert!(!skip_refresh(None, false, Some(b"me"), false, Some("me")), "stale marker retries");
+        // Unknown account (no ~/.claude.json): empty marker matches — the
+        // pre-stamp behavior.
+        assert!(skip_refresh(None, false, Some(b""), true, None));
+        assert!(!skip_refresh(None, false, Some(b"them"), true, None));
     }
 }
