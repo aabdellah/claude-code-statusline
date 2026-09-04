@@ -96,6 +96,19 @@ pub struct ScopedWindows {
 /// belong to. Pre-stamp cache files (bare `ScopedWindows`) deserialize with
 /// `account: None` and empty windows — treated as another account's data
 /// whenever the current account is known.
+/// Every window `/api/oauth/usage` reports, for the `--usage-json` /
+/// `--wait-until` probe (see `probe.rs`). The render path keeps using the
+/// narrower `ScopedWindows` cache; this is fetched on its own cadence.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FullWindows {
+    pub five_hour: Option<crate::input::RateLimitWindow>,
+    pub seven_day: Option<crate::input::RateLimitWindow>,
+    pub fable: Option<crate::input::RateLimitWindow>,
+    pub opus: Option<crate::input::RateLimitWindow>,
+    pub sonnet: Option<crate::input::RateLimitWindow>,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct UsageCache {
@@ -296,6 +309,51 @@ fn try_refresh(cache: &std::path::Path, account: Option<&str>) -> Option<()> {
     write_private(cache, &bytes)
 }
 
+/// Probe road: one authenticated fetch, every window. `None` when there is
+/// no live token, the network call fails, or the body is not an object.
+/// Blocks up to FETCH_TIMEOUT_SEC — never call from the render path.
+pub fn fetch_full() -> Option<FullWindows> {
+    if source_off() {
+        return None;
+    }
+    let token = load_oauth_token()?;
+    let body = fetch(&token)?;
+    normalize_full(&body)
+}
+
+/// The account stamp the probe's own cache is keyed on (same rule as the
+/// render cache: a `/login` to another account invalidates it).
+pub fn account_stamp() -> Option<String> {
+    current_account()
+}
+
+/// Private, account-stamped state file for the probe's cache — same
+/// directory and permissions as the render cache.
+pub fn probe_cache_path() -> Option<PathBuf> {
+    Some(state_dir()?.join("usage-full.json"))
+}
+
+pub fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> Option<()> {
+    write_private(path, bytes)
+}
+
+pub fn file_age(path: &std::path::Path) -> Option<Duration> {
+    age_of(path)
+}
+
+/// `normalize` plus the two account-wide windows.
+pub fn normalize_full(body: &[u8]) -> Option<FullWindows> {
+    let scoped = normalize(body)?;
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    Some(FullWindows {
+        five_hour: top_level_window(v.get("five_hour")),
+        seven_day: top_level_window(v.get("seven_day")),
+        fable: scoped.fable,
+        opus: scoped.opus,
+        sonnet: scoped.sonnet,
+    })
+}
+
 /// CC's OAuth access token, from whichever store holds the ACTIVE account's
 /// credentials. Returns None when neither source has a live token — CC
 /// rewrites the credentials as it refreshes, so a later cycle picks up the
@@ -482,6 +540,18 @@ mod tests {
         assert!(fable.resets_at.unwrap().is_string());
         assert!(scoped.opus.is_none(), "null top-level window stays None");
         assert!(scoped.sonnet.is_none());
+    }
+
+    #[test]
+    fn normalize_full_carries_account_wide_windows() {
+        let full = normalize_full(LIVE_SHAPE).expect("parses");
+        assert_eq!(full.five_hour.unwrap().used_percentage, Some(18.0));
+        assert_eq!(full.seven_day.unwrap().used_percentage, Some(7.0));
+        assert_eq!(full.fable.unwrap().used_percentage, Some(7.0));
+        assert!(full.opus.is_none());
+        // A body with neither account-wide window still parses.
+        let full = normalize_full(br#"{"limits": []}"#).expect("parses");
+        assert!(full.five_hour.is_none() && full.seven_day.is_none());
     }
 
     #[test]

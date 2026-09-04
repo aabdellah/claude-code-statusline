@@ -119,6 +119,39 @@ keys preserved), and the auto-rebuild job if installed.
 | `STATUSLINE_WIDTH_MARGIN=N` | Cells subtracted from detected width before fitting (default `4` — Claude Code draws 2 cells of frame on each side of the pane). Set to `0` if using a host without margins. |
 | `STATUSLINE_DEBUG_WIDTH=1` | Persist width-detection trace to `/tmp` |
 
+## Rate-limit probe for schedulers
+
+The binary doubles as a quota probe for anything that cannot see the status
+line — a long-running Claude Code Workflow, a cron job, a build queue. Same
+token handling as the render path (keychain / credentials file, fixed-path
+`curl`, bearer via curl config, never argv); the caller gets numbers, not
+credentials.
+
+```bash
+# One JSON document: every window /api/oauth/usage reports, plus pace.
+~/.claude/bin/cc-statusline --usage-json
+# {"account":"…","fetched_at":"2026-09-04T23:07:10Z","cached":false,
+#  "windows":{"five_hour":{"used_percentage":52.0,"resets_at":"…"},
+#             "seven_day":{…},"fable":{…},"opus":null,"sonnet":null},
+#  "seven_day_pace":{"projected":19.0,"frac_elapsed":0.58},
+#  "five_hour_pace":{…},"earliest_reset":"2026-09-05T01:09:59Z","unmet":[]}
+
+# Block until every condition holds, then print the same document.
+~/.claude/bin/cc-statusline --wait-until 'five_hour<85,seven_day<92,fable<95,pace<105' [--timeout SECS]
+```
+
+Windows: `five_hour`/`5h`, `seven_day`/`7d`, `fable`, `opus`, `sonnet`,
+and `pace` (projected end-of-week use of the 7d cap at the current rate).
+Operators: `<` and `<=`. A window the account does not have satisfies any
+condition on it. Exit codes: 0 satisfied, 2 no data for 30 min, 3 timeout,
+64 bad spec. Progress goes to stderr.
+
+Wait mode polls every 5 min, or sooner when an unmet window's reset is
+closer, and sleeps in 10 s slices that re-read the active account: a
+`/login` to another account wakes it at once and the next fetch shows the
+new quota. Cache: `usage-full.json` in the private state dir, 120 s TTL,
+account-stamped. Opt out with `STATUSLINE_USAGE_SOURCE=off` (exit 2).
+
 ## Source layout
 
 ```
@@ -134,6 +167,7 @@ claude-code-statusline/
 │   ├── transcript.rs      # JSONL tail reader + derived metrics
 │   ├── anthropic.rs       # status.claude.com check (cached + bg refresh)
 │   ├── pace.rs            # 7-day rate-limit pace projection
+│   ├── probe.rs           # --usage-json / --wait-until quota probe for schedulers
 │   ├── width.rs           # terminal-width detection (8 layered fallbacks)
 │   ├── layout.rs          # priority-tiered adaptive fit (full/compact/micro/drop)
 │   └── render.rs          # segment assembly

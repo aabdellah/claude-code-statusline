@@ -15,6 +15,7 @@ mod input;
 mod layout;
 mod pace;
 mod pricing;
+mod probe;
 mod render;
 mod repr;
 mod segments;
@@ -31,6 +32,26 @@ fn main() {
     if std::env::args().any(|a| a == "--refresh-today") {
         aggregate::run_refresh_today();
         return;
+    }
+
+    // Rate-limit probe for external schedulers (no stdin contract):
+    //   statusline --usage-json
+    //   statusline --wait-until 'five_hour<85,seven_day<92,fable<95' [--timeout SECS]
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--usage-json") {
+        std::process::exit(probe::run_usage_json());
+    }
+    if let Some(i) = args.iter().position(|a| a == "--wait-until") {
+        let Some(spec) = args.get(i + 1) else {
+            eprintln!("usage: statusline --wait-until 'five_hour<85,seven_day<92' [--timeout SECS]");
+            std::process::exit(64);
+        };
+        let timeout = args
+            .iter()
+            .position(|a| a == "--timeout")
+            .and_then(|t| args.get(t + 1))
+            .and_then(|v| v.parse::<u64>().ok());
+        std::process::exit(probe::run_wait_until(spec, timeout));
     }
 
     let mut buf = Vec::with_capacity(4096);

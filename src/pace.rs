@@ -52,20 +52,41 @@ impl Pace {
     }
 }
 
+/// A window's `resets_at` as Unix milliseconds, whichever shape CC or the
+/// OAuth endpoint sent (Unix seconds, Unix ms, or RFC 3339). `None` when
+/// absent or unparseable.
+pub fn reset_ms(window: &RateLimitWindow) -> Option<i64> {
+    match window.resets_at.as_ref()? {
+        serde_json::Value::Number(n) => {
+            let v = n.as_f64()?;
+            Some(if v < 1e12 { (v * 1000.0) as i64 } else { v as i64 })
+        }
+        serde_json::Value::String(s) => crate::format::parse_rfc3339_ms(s),
+        _ => None,
+    }
+}
+
+/// Pace of an arbitrary rolling window of `window_ms` length, at `now_ms`.
+/// `seven_day_pace` is this with the 7-day length and the wall clock.
+pub fn pace_at(window: &RateLimitWindow, window_ms: i64, now_ms: i64) -> Option<Pace> {
+    let used_pct = window.used_percentage?;
+    let mut pace = Pace { used_pct, projected: None, frac_elapsed: None };
+    let Some(reset) = reset_ms(window) else { return Some(pace) };
+    let frac = (now_ms - (reset - window_ms)) as f64 / window_ms as f64;
+    if !(0.0..=1.0).contains(&frac) {
+        return Some(pace);
+    }
+    pace.frac_elapsed = Some(frac);
+    pace.projected = Some(used_pct / frac);
+    Some(pace)
+}
+
 pub fn seven_day_pace(seven_day: &RateLimitWindow) -> Option<Pace> {
     let used_pct = seven_day.used_percentage?;
 
     let mut pace = Pace { used_pct, projected: None, frac_elapsed: None };
 
-    let Some(resets_at) = &seven_day.resets_at else { return Some(pace); };
-    let reset_ms = match resets_at {
-        serde_json::Value::Number(n) => {
-            let v = n.as_f64()?;
-            if v < 1e12 { (v * 1000.0) as i64 } else { v as i64 }
-        }
-        serde_json::Value::String(s) => crate::format::parse_rfc3339_ms(s)?,
-        _ => return Some(pace),
-    };
+    let Some(reset_ms) = reset_ms(seven_day) else { return Some(pace); };
 
     let window_start = reset_ms - SEVEN_DAY_MS;
     let now_ms = std::time::SystemTime::now()
