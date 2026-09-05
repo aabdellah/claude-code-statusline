@@ -242,16 +242,13 @@ struct ProbeCache {
 fn load(force: bool) -> Option<(FullWindows, bool, i64)> {
     let account = usage::account_stamp();
     let path = usage::probe_cache_path();
-    if !force {
-        if let Some(p) = path.as_deref() {
-            if usage::file_age(p).is_some_and(|a| a < TTL) {
-                if let Some(c) = std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<ProbeCache>(&b).ok()) {
-                    if c.account == account {
-                        return Some((c.windows, true, c.fetched_at_ms));
-                    }
-                }
-            }
-        }
+    if !force
+        && let Some(p) = path.as_deref()
+        && usage::file_age(p).is_some_and(|a| a < TTL)
+        && let Some(c) = std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<ProbeCache>(&b).ok())
+        && c.account == account
+    {
+        return Some((c.windows, true, c.fetched_at_ms));
     }
     let windows = usage::fetch_full()?;
     let fetched_at_ms = now_ms();

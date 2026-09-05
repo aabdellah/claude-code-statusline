@@ -69,10 +69,7 @@ pub struct TodayRollup {
 /// cache, so subsequent renders pick up the rolled-up data.
 pub fn read_today() -> Option<TodayRollup> {
     reconcile_pending_rollups();
-    let today_anchor = match platform::local_midnight_utc_ms() {
-        Some(v) => v,
-        None => return None,
-    };
+    let today_anchor = platform::local_midnight_utc_ms()?;
     let (cached, stale) = read_cache();
     let fresh_today = cached.as_ref().is_some_and(|r| r.day_anchor_ms == today_anchor);
     if stale || !fresh_today {
@@ -152,15 +149,13 @@ fn reconcile_pending_rollups() {
             Err(_) => continue,
         }
         // Don't promote files that might still be mid-write.
-        if let Ok(meta) = path.metadata() {
-            if let Ok(modified) = meta.modified() {
-                if SystemTime::now().duration_since(modified)
-                    .map(|d| d < Duration::from_secs(2))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-            }
+        if let Ok(meta) = path.metadata()
+            && let Ok(modified) = meta.modified()
+            && SystemTime::now().duration_since(modified)
+                .map(|d| d < Duration::from_secs(2))
+                .unwrap_or(false)
+        {
+            continue;
         }
         match fs::read(&path) {
             Ok(bytes) if serde_json::from_slice::<TodayRollup>(&bytes).is_ok() => {
@@ -202,19 +197,19 @@ fn scan_projects(day_anchor_ms: i64) -> TodayRollup {
             // mtime filter — skip files last touched before today's midnight.
             // Big win: most projects haven't been touched today, so we skip
             // the open+parse cost entirely.
-            if let Ok(meta) = path.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    // try_from guard — `as i64` would silently wrap to a
-                    // negative value on pathological future mtimes (clock
-                    // skew, malicious file metadata), causing the mtime
-                    // pre-filter below to admit the file when it shouldn't.
-                    let modified_ms = modified
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .ok()
-                        .and_then(|d| i64::try_from(d.as_millis()).ok())
-                        .unwrap_or(i64::MAX);
-                    if modified_ms < day_anchor_ms { continue; }
-                }
+            if let Ok(meta) = path.metadata()
+                && let Ok(modified) = meta.modified()
+            {
+                // try_from guard — `as i64` would silently wrap to a
+                // negative value on pathological future mtimes (clock
+                // skew, malicious file metadata), causing the mtime
+                // pre-filter below to admit the file when it shouldn't.
+                let modified_ms = modified
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|d| i64::try_from(d.as_millis()).ok())
+                    .unwrap_or(i64::MAX);
+                if modified_ms < day_anchor_ms { continue; }
             }
             accumulate_file(&path, day_anchor_ms, &mut rollup);
         }

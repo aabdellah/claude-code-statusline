@@ -39,10 +39,10 @@ fn visible_length_internal(s: &str) -> usize {
         match state {
             0 => {
                 if b == 0x1b { state = 1; }
-                else if b < 0x80 { count += 1; }
-                else if b & 0xC0 != 0x80 { count += 1; } // leading byte of UTF-8 char
-                // continuation bytes (10xxxxxx) don't count — they're part of
-                // the previous codepoint
+                // ASCII, or the leading byte of a multi-byte UTF-8 char.
+                // Continuation bytes (10xxxxxx) don't count — they're part
+                // of the previous codepoint.
+                else if b < 0x80 || b & 0xC0 != 0x80 { count += 1; }
             }
             1 => state = if b == b'[' { 2 } else { 0 }, // ESC [
             2 => {

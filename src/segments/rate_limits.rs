@@ -39,19 +39,19 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let mut red_count = 0u32;
 
     // 5h window
-    if let Some(fh) = rl.and_then(|r| r.five_hour.as_ref()) {
-        if let Some(p) = fh.used_percentage {
-            let col = ansi::pct_color(p, 70.0, 90.0);
-            let (mut full, compact) = repr::percent("5h", "5h", p, col);
-            let reset_str = fh.resets_at.as_ref().map(fmt_reset_time).unwrap_or_default();
-            if !reset_str.is_empty() {
-                full.push_str(&format!("{}→{}{}", DIM, reset_str, RESET));
-            }
-            full_bits.push(full);
-            compact_bits.push(compact);
-            if p >= 90.0 {
-                red_count += 1;
-            }
+    if let Some(fh) = rl.and_then(|r| r.five_hour.as_ref())
+        && let Some(p) = fh.used_percentage
+    {
+        let col = ansi::pct_color(p, 70.0, 90.0);
+        let (mut full, compact) = repr::percent("5h", "5h", p, col);
+        let reset_str = fh.resets_at.as_ref().map(fmt_reset_time).unwrap_or_default();
+        if !reset_str.is_empty() {
+            full.push_str(&format!("{}→{}{}", DIM, reset_str, RESET));
+        }
+        full_bits.push(full);
+        compact_bits.push(compact);
+        if p >= 90.0 {
+            red_count += 1;
         }
     }
 
@@ -148,8 +148,8 @@ fn weekly_window(
     // In the last 24h of the window, render the reset countdown BEFORE the
     // projection — recovery is the actionable signal at this point. GREEN to
     // communicate "almost there, hold on".
-    if pace_obj.in_last_24h() {
-        if let Some(reset_str) = win
+    if pace_obj.in_last_24h()
+        && let Some(reset_str) = win
             .resets_at
             .as_ref()
             .map(fmt_reset_time)
@@ -158,7 +158,6 @@ fn weekly_window(
             full.push_str(&format!(" {}→{}{}", GREEN, reset_str, RESET));
             compact.push_str(&format!("{}/{}{}", GREEN, reset_str, RESET));
         }
-    }
 
     if let (Some(projected), Some(frac)) = (pace_obj.projected, pace_obj.frac_elapsed) {
         let pcol = pace::pace_color(projected, frac);
@@ -200,8 +199,7 @@ mod tests {
     use crate::input::{RateLimitWindow, RateLimits, StatusInput};
 
     fn input_with_rate_limits(five_pct: f64, seven_pct: f64) -> StatusInput {
-        let mut input = StatusInput::default();
-        input.rate_limits = Some(RateLimits {
+        input_with(RateLimits {
             five_hour: Some(RateLimitWindow {
                 used_percentage: Some(five_pct),
                 resets_at: None,
@@ -211,8 +209,11 @@ mod tests {
                 resets_at: None,
             }),
             ..Default::default()
-        });
-        input
+        })
+    }
+
+    fn input_with(rate_limits: RateLimits) -> StatusInput {
+        StatusInput { rate_limits: Some(rate_limits), ..StatusInput::default() }
     }
 
     fn with_fable(mut input: StatusInput, fable_pct: f64) -> StatusInput {
@@ -319,8 +320,7 @@ mod tests {
         // unused scoped windows alone would trip the CRIT banner on a
         // perfectly healthy session.
         let day_and_a_half = 36 * 3600; // frac ≈ 0.786, past the 0.70 gate
-        let mut input = StatusInput::default();
-        input.rate_limits = Some(RateLimits {
+        let input = input_with(RateLimits {
             five_hour: Some(RateLimitWindow { used_percentage: Some(20.0), resets_at: None }),
             // 70% used at frac .786 → projected ~89%, inside the safe band.
             seven_day: Some(win_resetting_in(70.0, day_and_a_half)),
@@ -338,8 +338,7 @@ mod tests {
     fn account_wide_underpace_red_still_fires() {
         // The underpace red stays meaningful for the account-wide 7d window:
         // 40% used at frac ≈ 0.786 → projected ~51% < 80% late in the week.
-        let mut input = StatusInput::default();
-        input.rate_limits = Some(RateLimits {
+        let input = input_with(RateLimits {
             seven_day: Some(win_resetting_in(40.0, 36 * 3600)),
             ..Default::default()
         });
@@ -356,8 +355,7 @@ mod tests {
         // (account-wide 7d contains the scoped usage), so the segment caps
         // at layout.rs's documented per-segment maximum of 3.
         let mid_window = 3 * 24 * 3600 + 12 * 3600; // frac = 0.5 → projected 190%
-        let mut input = StatusInput::default();
-        input.rate_limits = Some(RateLimits {
+        let input = input_with(RateLimits {
             five_hour: Some(RateLimitWindow { used_percentage: Some(95.0), resets_at: None }),
             seven_day: Some(win_resetting_in(95.0, mid_window)),
             seven_day_overage_included: Some(win_resetting_in(95.0, mid_window)),

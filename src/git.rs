@@ -68,10 +68,7 @@ pub fn find_gitdir(start: &Path) -> Option<PathBuf> {
             }
             _ => {}
         }
-        match p.parent() {
-            Some(parent) => p = parent,
-            None => return None,
-        }
+        p = p.parent()?;
     }
 }
 
@@ -139,25 +136,19 @@ pub fn git_status(cwd: &Path) -> GitStatus {
     }
 
     // --- Ahead/behind (vs configured upstream)
-    if let Ok(head_ref) = repo.head() {
-        if let Some(local_oid) = head_ref.target() {
-            if let Some(shorthand) = head_ref.shorthand() {
-                let full_branch = format!("refs/heads/{}", shorthand);
-                if let Ok(upstream_name) = repo.branch_upstream_name(&full_branch) {
-                    if let Some(name) = upstream_name.as_str() {
-                        if let Ok(upstream_ref) = repo.find_reference(name) {
-                            if let Some(upstream_oid) = upstream_ref.target() {
-                                if let Ok((ahead, behind)) =
-                                    repo.graph_ahead_behind(local_oid, upstream_oid)
-                                {
-                                    s.ahead = ahead as u32;
-                                    s.behind = behind as u32;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    if let Ok(head_ref) = repo.head()
+        && let Some(local_oid) = head_ref.target()
+        && let Some(shorthand) = head_ref.shorthand()
+    {
+        let full_branch = format!("refs/heads/{}", shorthand);
+        if let Ok(upstream_name) = repo.branch_upstream_name(&full_branch)
+            && let Some(name) = upstream_name.as_str()
+            && let Ok(upstream_ref) = repo.find_reference(name)
+            && let Some(upstream_oid) = upstream_ref.target()
+            && let Ok((ahead, behind)) = repo.graph_ahead_behind(local_oid, upstream_oid)
+        {
+            s.ahead = ahead as u32;
+            s.behind = behind as u32;
         }
     }
 
@@ -187,12 +178,11 @@ pub fn worktree_stats(cwd: &Path) -> WorktreeStats {
         let Some(name) = name_opt else { continue; };
         let Ok(wt) = repo.find_worktree(name) else { continue; };
         let head_path = resolve_head_path(wt.path());
-        if let Ok(meta) = fs::metadata(&head_path) {
-            if let Ok(modified) = meta.modified() {
-                if now.duration_since(modified).map(|d| d > STALE_WT).unwrap_or(false) {
-                    stale += 1;
-                }
-            }
+        if let Ok(meta) = fs::metadata(&head_path)
+            && let Ok(modified) = meta.modified()
+            && now.duration_since(modified).map(|d| d > STALE_WT).unwrap_or(false)
+        {
+            stale += 1;
         }
     }
     WorktreeStats { extras: names.len() as u32, stale }

@@ -202,10 +202,10 @@ pub fn lookup(model: &str) -> Option<Pricing> {
             return Some(*p);
         }
         let normalized = strip_date_suffix(&target);
-        if normalized != target {
-            if let Some(p) = map.get(&normalized) {
-                return Some(*p);
-            }
+        if normalized != target
+            && let Some(p) = map.get(&normalized)
+        {
+            return Some(*p);
         }
     }
 

@@ -83,7 +83,7 @@ pub fn fmt_duration(ms: u64) -> Option<String> {
     if s < 60 { return Some(format!("{}s", s)); }
     let m = s / 60;
     if m < 60 {
-        return Some(if s % 60 != 0 {
+        return Some(if !s.is_multiple_of(60) {
             format!("{}m{}s", m, s % 60)
         } else {
             format!("{}m", m)
@@ -191,7 +191,7 @@ pub(crate) fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     let y = year - if month <= 2 { 1 } else { 0 };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
-    let m = month as i64;
+    let m = month;
     let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days_from_epoch = era * 146097 + doe - 719468;
@@ -274,10 +274,10 @@ pub fn short_model_name(model: Option<&Model>) -> String {
         // Strip parenthetical " (... context)" suffix.
         if let Some(open) = d.rfind(" (") {
             let after = &d[open + 2..];
-            if let Some(close) = after.find(')') {
-                if after[..close].to_lowercase().ends_with("context") {
-                    return d[..open].trim().to_string();
-                }
+            if let Some(close) = after.find(')')
+                && after[..close].to_lowercase().ends_with("context")
+            {
+                return d[..open].trim().to_string();
             }
         }
         return d.trim().to_string();
@@ -352,7 +352,7 @@ pub fn short_model_compact(model: Option<&Model>) -> String {
 /// truncate at 8 chars with a `~` to signal truncation.
 pub fn compact_repo_name(name: &str) -> String {
     if name.is_empty() { return String::new(); }
-    let first_sep = name.find(|c: char| c == '-' || c == '_');
+    let first_sep = name.find(['-', '_']);
     if let Some(idx) = first_sep {
         return name[..idx].to_string();
     }

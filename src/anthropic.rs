@@ -10,8 +10,9 @@
 //!      - validating their JSON
 //!      - atomically renaming valid ones onto the cache path
 //!      - unlinking invalid ones
-//!   No `sh -c` shell composition needed — `curl` is invoked directly with
-//!   args, the rename is done by `fs::rename` (atomic POSIX rename).
+//!
+//! No `sh -c` shell composition needed — `curl` is invoked directly with
+//! args, the rename is done by `fs::rename` (atomic POSIX rename).
 
 use std::fs;
 use std::path::PathBuf;
@@ -85,15 +86,13 @@ fn reconcile_pending_fetches() {
         // Only reconcile files older than 2s — anything fresher might still
         // be mid-write by an in-flight curl, and we'd rather wait for the
         // next render than promote a half-written file.
-        if let Ok(meta) = path.metadata() {
-            if let Ok(modified) = meta.modified() {
-                if SystemTime::now().duration_since(modified)
-                    .map(|d| d < Duration::from_secs(2))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-            }
+        if let Ok(meta) = path.metadata()
+            && let Ok(modified) = meta.modified()
+            && SystemTime::now().duration_since(modified)
+                .map(|d| d < Duration::from_secs(2))
+                .unwrap_or(false)
+        {
+            continue;
         }
         match fs::read(&path) {
             Ok(bytes) if serde_json::from_slice::<serde_json::Value>(&bytes).is_ok() => {

@@ -72,10 +72,10 @@ pub fn cache_ttl_ms_remaining(entries: &[Value]) -> Option<i64> {
         .ok()
         .and_then(|d| i64::try_from(d.as_millis()).ok())?;
     for e in entries.iter().rev() {
-        if let Some(ts) = e.get("timestamp").and_then(|v| v.as_str()) {
-            if let Some(t) = parse_rfc3339_ms(ts) {
-                return Some(CACHE_TTL_MS - (now_ms - t));
-            }
+        if let Some(ts) = e.get("timestamp").and_then(|v| v.as_str())
+            && let Some(t) = parse_rfc3339_ms(ts)
+        {
+            return Some(CACHE_TTL_MS - (now_ms - t));
         }
     }
     None
@@ -169,8 +169,10 @@ pub fn yak_depth(entries: &[Value]) -> u32 {
         // Only insert when we have a real UUID — using "" as a sentinel
         // would collide for ALL entries missing a uuid, breaking the walk
         // early on the second such entry (incorrectly capping depth).
-        if let Some(cur_uuid) = current.get("uuid").and_then(|v| v.as_str()) {
-            if !seen.insert(cur_uuid) { break; }
+        if let Some(cur_uuid) = current.get("uuid").and_then(|v| v.as_str())
+            && !seen.insert(cur_uuid)
+        {
+            break;
         }
         depth += 1;
         let Some(&next_idx) = by_uuid.get(src) else { break; };

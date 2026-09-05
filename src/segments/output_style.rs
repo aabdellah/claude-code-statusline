@@ -14,10 +14,10 @@ use crate::layout::{Priority, Seg};
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let mut styles: BTreeSet<&str> = BTreeSet::new();
-    if let Some(name) = ctx.input.output_style.as_ref().and_then(|s| s.name.as_deref()) {
-        if name != "default" {
-            styles.insert(name);
-        }
+    if let Some(name) = ctx.input.output_style.as_ref().and_then(|s| s.name.as_deref())
+        && name != "default"
+    {
+        styles.insert(name);
     }
     for s in &ctx.plugin_styles {
         styles.insert(s.as_str());

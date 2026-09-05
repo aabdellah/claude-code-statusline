@@ -71,14 +71,15 @@ mod tests {
     }
 
     fn input_with_pct(used_pct: f64, size: u64, exceeds: bool) -> StatusInput {
-        let mut input = StatusInput::default();
-        input.context_window = Some(ContextWindow {
-            used_percentage: Some(used_pct),
-            context_window_size: Some(size),
-            ..ContextWindow::default()
-        });
-        input.exceeds_200k_tokens = Some(exceeds);
-        input
+        StatusInput {
+            context_window: Some(ContextWindow {
+                used_percentage: Some(used_pct),
+                context_window_size: Some(size),
+                ..ContextWindow::default()
+            }),
+            exceeds_200k_tokens: Some(exceeds),
+            ..StatusInput::default()
+        }
     }
 
     #[test]

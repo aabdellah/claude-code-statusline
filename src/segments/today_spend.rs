@@ -81,9 +81,7 @@ mod tests {
     use crate::aggregate::TodayRollup;
     use crate::config::Config;
     use crate::context::RenderContext;
-    use crate::git::{GitStatus, WorktreeStats};
     use crate::input::StatusInput;
-    use std::path::PathBuf;
 
     use crate::ansi::strip_ansi as strip;
 

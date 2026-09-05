@@ -111,20 +111,20 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
     }
 
     // PR badge (from CC's JSON input)
-    if let Some(pr) = ctx.input.pr.as_ref() {
-        if let Some(num) = pr.number {
-            let pr_state = pr.review_state.as_deref();
-            let pr_color = match pr_state {
-                Some("APPROVED") => GREEN,
-                Some("CHANGES_REQUESTED") => RED,
-                _ => BLUE,
-            };
-            let s = format!(" {}#{}{}", pr_color, num, RESET);
-            full.push_str(&s);
-            compact.push_str(&s);
-            if pr_state == Some("CHANGES_REQUESTED") {
-                red_count += 1;
-            }
+    if let Some(pr) = ctx.input.pr.as_ref()
+        && let Some(num) = pr.number
+    {
+        let pr_state = pr.review_state.as_deref();
+        let pr_color = match pr_state {
+            Some("APPROVED") => GREEN,
+            Some("CHANGES_REQUESTED") => RED,
+            _ => BLUE,
+        };
+        let s = format!(" {}#{}{}", pr_color, num, RESET);
+        full.push_str(&s);
+        compact.push_str(&s);
+        if pr_state == Some("CHANGES_REQUESTED") {
+            red_count += 1;
         }
     }
 
@@ -161,12 +161,13 @@ mod tests {
     }
 
     fn input_with_pr(num: u64, review_state: Option<&str>) -> StatusInput {
-        let mut input = StatusInput::default();
-        input.pr = Some(Pr {
-            number: Some(num),
-            review_state: review_state.map(str::to_owned),
-        });
-        input
+        StatusInput {
+            pr: Some(Pr {
+                number: Some(num),
+                review_state: review_state.map(str::to_owned),
+            }),
+            ..StatusInput::default()
+        }
     }
 
     #[test]
@@ -211,13 +212,14 @@ mod tests {
     #[test]
     fn worktree_marker_only_in_full_variant() {
         let input = {
-            let mut i = StatusInput::default();
-            i.worktree = Some(crate::input::Worktree {
-                name: Some("feat".into()),
-                branch: None,
-                original_branch: Some("main".into()),
-            });
-            i
+            StatusInput {
+                worktree: Some(crate::input::Worktree {
+                    name: Some("feat".into()),
+                    branch: None,
+                    original_branch: Some("main".into()),
+                }),
+                ..StatusInput::default()
+            }
         };
         let cfg = Config::from_env();
         let mut ctx = ctx_with_pr(&input, &cfg, "wt-feat", WorktreeStats::default());

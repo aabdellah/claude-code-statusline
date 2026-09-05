@@ -40,18 +40,18 @@ pub fn render(ctx: &RenderContext) -> Option<Seg> {
         compact_bits.push(compact);
     }
 
-    if let Some(ms) = ttl_ms {
-        if let Some(ttl_str) = fmt_ttl(ms) {
-            let ttl_color = if ms < 60_000 {
-                RED
-            } else if ms < 180_000 {
-                YELLOW
-            } else {
-                GREEN
-            };
-            full_bits.push(format!("{}ttl {}{}", ttl_color, ttl_str, RESET));
-            compact_bits.push(format!("{}{}{}", ttl_color, ttl_str, RESET));
-        }
+    if let Some(ms) = ttl_ms
+        && let Some(ttl_str) = fmt_ttl(ms)
+    {
+        let ttl_color = if ms < 60_000 {
+            RED
+        } else if ms < 180_000 {
+            YELLOW
+        } else {
+            GREEN
+        };
+        full_bits.push(format!("{}ttl {}{}", ttl_color, ttl_str, RESET));
+        compact_bits.push(format!("{}{}{}", ttl_color, ttl_str, RESET));
     }
 
     if full_bits.is_empty() {

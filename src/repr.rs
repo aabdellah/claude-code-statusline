@@ -51,6 +51,7 @@ pub fn percent(label_full: &str, label_compact: &str, pct: f64, color: &str) -> 
 ///   - Label is rendered in `color_label`.
 ///   - Sign + number are rendered in `color_value` (typically green for net
 ///     negative-good, yellow for net positive-pending).
+///
 /// Full uses SPACE; compact uses COLON.
 pub fn signed_delta(
     label_full: &str,

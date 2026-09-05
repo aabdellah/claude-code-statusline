@@ -10,7 +10,8 @@
 //!   7. $COLUMNS env var
 //!   8. Per-PTY cache file `/tmp/cc-term-width-<tty>`
 //!   9. Shared cache file `/tmp/cc-term-width`
-//!   → None (caller assumes wide, renders full)
+//!
+//! Otherwise `None` — the caller assumes wide and renders full.
 //!
 //! Windows has no PTYs to walk, so its chain is: override → console-buffer
 //! info on stdout/stderr → `CONOUT$` (the console we're attached to, if
@@ -46,8 +47,8 @@ pub fn detect_term_width(cfg: &Config) -> Option<u16> {
         if result.is_none() {
             if let Ok(s) = std::env::var("COLUMNS") {
                 trace.insert("env_COLUMNS", s.clone());
-                if let Ok(n) = s.parse::<u16>() {
-                    if n > 0 { result = Some(n); }
+                if let Ok(n) = s.parse::<u16>() && n > 0 {
+                    result = Some(n);
                 }
             } else {
                 trace.insert("env_COLUMNS", "unset".into());
