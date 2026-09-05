@@ -5,10 +5,12 @@
 //! "today's $ across all sessions" we must recompute cost ourselves from
 //! `message.usage.*` token counts × an embedded pricing table.
 //!
-//! Day boundary is **local midnight** (per user preference). Computed via
-//! `libc::localtime_r` + `mktime` — no `chrono` dep needed to keep the binary
-//! small. DST-correct: uses the current day's `tm_gmtoff`, which is what
-//! "today's midnight" means in the user's wall clock.
+//! Day boundary is **local midnight** (per user preference). Computed by
+//! `platform::local_midnight_utc_ms` — `libc::localtime_r` + `mktime` on
+//! Unix, `TzSpecificLocalTimeToSystemTime` on Windows — no `chrono` dep
+//! needed to keep the binary small. DST-correct either way: the conversion
+//! applies the zone rules in force at that instant, which is what "today's
+//! midnight" means in the user's wall clock.
 //!
 //! Background-refresh pattern mirrors `src/anthropic.rs`:
 //!   1. Each render reads the cache file (~1ms).
@@ -25,18 +27,24 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use crate::format::parse_rfc3339_ms;
+use crate::platform;
 use crate::pricing;
 
-const CACHE_PATH: &str = "/tmp/cc-statusline-today.json";
+// Public, machine-global data — lives in the shared scratch dir (/tmp on
+// Unix, %TEMP% on Windows).
+const CACHE_NAME: &str = "cc-statusline-today.json";
 const TMP_PREFIX: &str = "cc-statusline-today.json.";
 const TMP_SUFFIX: &str = ".tmp";
 const TTL: Duration = Duration::from_secs(60);
+
+fn cache_path() -> PathBuf {
+    platform::shared_tmp_dir().join(CACHE_NAME)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TodayRollup {
@@ -61,7 +69,7 @@ pub struct TodayRollup {
 /// cache, so subsequent renders pick up the rolled-up data.
 pub fn read_today() -> Option<TodayRollup> {
     reconcile_pending_rollups();
-    let today_anchor = match local_midnight_utc_ms() {
+    let today_anchor = match platform::local_midnight_utc_ms() {
         Some(v) => v,
         None => return None,
     };
@@ -91,24 +99,25 @@ pub fn run_refresh_today() {
     // not in the statusline stdin as of CC v2.1.201, see CLAUDE.md).
     crate::usage::refresh_sync();
 
-    let Some(day_anchor) = local_midnight_utc_ms() else { return };
+    let Some(day_anchor) = platform::local_midnight_utc_ms() else { return };
     let rollup = scan_projects(day_anchor);
     if let Some(tmp_path) = write_tmp_file(&rollup) {
-        let _ = fs::rename(&tmp_path, CACHE_PATH);
+        let _ = fs::rename(&tmp_path, cache_path());
     }
 }
 
 // --- Cache I/O --------------------------------------------------------------
 
 fn read_cache() -> (Option<TodayRollup>, bool) {
-    let metadata = match fs::metadata(CACHE_PATH) {
+    let path = cache_path();
+    let metadata = match fs::metadata(&path) {
         Ok(m) => m,
         Err(_) => return (None, true),
     };
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let age = SystemTime::now().duration_since(modified).unwrap_or(TTL);
     let stale = age >= TTL;
-    let parsed = fs::read(CACHE_PATH)
+    let parsed = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<TodayRollup>(&bytes).ok());
     (parsed, stale)
@@ -117,16 +126,16 @@ fn read_cache() -> (Option<TodayRollup>, bool) {
 /// Writes the rollup to a PID-suffixed tmp file. Returns the tmp path on
 /// success so the caller can atomic-rename it onto the cache. Returns `None`
 /// on serialization or write failure (caller silently degrades).
-fn write_tmp_file(rollup: &TodayRollup) -> Option<String> {
-    let pid = std::process::id();
-    let tmp_full = format!("{}.{}{}", CACHE_PATH, pid, TMP_SUFFIX);
+fn write_tmp_file(rollup: &TodayRollup) -> Option<PathBuf> {
+    let tmp_full = platform::shared_tmp_dir()
+        .join(format!("{}{}{}", TMP_PREFIX, std::process::id(), TMP_SUFFIX));
     let bytes = serde_json::to_vec(rollup).ok()?;
     fs::write(&tmp_full, &bytes).ok()?;
     Some(tmp_full)
 }
 
 fn reconcile_pending_rollups() {
-    let Ok(entries) = fs::read_dir("/tmp") else { return };
+    let Ok(entries) = fs::read_dir(platform::shared_tmp_dir()) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -155,7 +164,7 @@ fn reconcile_pending_rollups() {
         }
         match fs::read(&path) {
             Ok(bytes) if serde_json::from_slice::<TodayRollup>(&bytes).is_ok() => {
-                let _ = fs::rename(&path, CACHE_PATH);
+                let _ = fs::rename(&path, cache_path());
             }
             _ => {
                 let _ = fs::remove_file(&path);
@@ -166,56 +175,22 @@ fn reconcile_pending_rollups() {
 
 fn spawn_background_refresh() {
     let Ok(exe) = std::env::current_exe() else { return };
-    // SAFETY: pre_exec runs between fork and execve — calling setsid() there
-    // detaches us from the parent process group so the child outlives this
-    // render. Mirrors the pattern in src/anthropic.rs.
-    let _ = unsafe {
-        Command::new(exe)
-            .arg("--refresh-today")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            })
-            .spawn()
-    };
-}
-
-// --- Local-midnight via libc ------------------------------------------------
-
-/// Returns UTC milliseconds of today's local-wall-clock midnight, or `None`
-/// if the system clock or TZ database is unusable.
-///
-/// Algorithm: `localtime_r(now)` gives today's broken-down local time. Zero
-/// the hour/minute/second fields and call `mktime` to convert back to epoch
-/// seconds — `mktime` honors the current TZ rules so the result is correct
-/// across DST boundaries.
-fn local_midnight_utc_ms() -> Option<i64> {
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        if now < 0 { return None; }
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&now, &mut tm).is_null() {
-            return None;
-        }
-        tm.tm_hour = 0;
-        tm.tm_min = 0;
-        tm.tm_sec = 0;
-        tm.tm_isdst = -1;
-        let midnight_secs = libc::mktime(&mut tm);
-        if midnight_secs < 0 { return None; }
-        Some((midnight_secs as i64) * 1000)
-    }
+    // Detached so the child outlives this render — see
+    // platform::spawn_detached. Mirrors the pattern in src/anthropic.rs.
+    let mut cmd = Command::new(exe);
+    cmd.arg("--refresh-today")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let _ = platform::spawn_detached(&mut cmd);
 }
 
 // --- Scan + rollup ----------------------------------------------------------
 
 fn scan_projects(day_anchor_ms: i64) -> TodayRollup {
     let mut rollup = TodayRollup { day_anchor_ms, ..Default::default() };
-    let Some(home) = std::env::var_os("HOME") else { return rollup };
-    let projects_dir = PathBuf::from(home).join(".claude").join("projects");
+    let Some(home) = platform::home_dir() else { return rollup };
+    let projects_dir = home.join(".claude").join("projects");
     let Ok(project_entries) = fs::read_dir(&projects_dir) else { return rollup };
     for project in project_entries.flatten() {
         let project_path = project.path();
@@ -303,7 +278,7 @@ mod tests {
 
     #[test]
     fn local_midnight_is_aligned() {
-        let ms = local_midnight_utc_ms().expect("system has working TZ db");
+        let ms = platform::local_midnight_utc_ms().expect("system has working TZ db");
         assert_eq!(ms % 1000, 0);
         let now_ms = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)

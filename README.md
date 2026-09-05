@@ -12,11 +12,11 @@ cache 84% ttl 2:47 · $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 
 ```
 
 Written in Rust, ships as a single ~1.6 MB binary with zero runtime
-dependencies beyond what every Mac/Linux machine has by default. **~6 ms per
-render** on Apple Silicon (~18× faster than the original Node version, ~6.7×
-faster than the first Rust cut that still used `git` subprocesses). Local
-git operations use libgit2 directly; only the anthropic status check
-involves any non-libgit2 file I/O.
+dependencies beyond what every Mac/Linux/Windows machine has by default.
+**~6 ms per render** on Apple Silicon (~18× faster than the original Node
+version, ~6.7× faster than the first Rust cut that still used `git`
+subprocesses). Local git operations use libgit2 directly; only the anthropic
+status check involves any non-libgit2 file I/O.
 
 ## Install (any machine in under a minute)
 
@@ -52,6 +52,13 @@ Install Rust first if needed:
 ```powershell
 winget install Rustlang.Rustup
 ```
+
+Windows notes: Claude Code runs the status line through Git Bash when it's
+installed (PowerShell otherwise), so the installer writes the binary path
+with forward slashes. Width detection uses the console buffer, then the
+`COLUMNS` variable Claude Code exports; the tmux / `ps` / PTY fallbacks are
+Unix-only. Scratch caches live in `%TEMP%` instead of `/tmp`, and the
+account-scoped usage cache in `%LOCALAPPDATA%\cc-statusline`.
 
 ### What the installers do (identical across platforms)
 
@@ -96,7 +103,8 @@ keys preserved), and the auto-rebuild job if installed.
 ## Dependencies on the target machine
 
 - `git` (required for repo state — the binary shells out)
-- `curl` (optional — used for `status.claude.com` background fetch)
+- `curl` (optional — used for `status.claude.com` background fetch; Windows
+  10 1803+ ships it in `System32`)
 - macOS / Linux: `python3` (used by install.sh to patch settings.json safely;
   bundled with macOS since 12.3, install via your distro's package manager
   on Linux)
@@ -104,7 +112,7 @@ keys preserved), and the auto-rebuild job if installed.
 - Linux: a C compiler for the vendored libgit2 build (`gcc` /
   `build-essential` / `base-devel` per distro)
 - *That's it.* No Node, no Python, no shared libraries beyond `libSystem`
-  (macOS) / `glibc` (Linux).
+  (macOS) / `glibc` (Linux) / `kernel32` (Windows).
 
 ## Configuration (env vars)
 
@@ -117,7 +125,7 @@ keys preserved), and the auto-rebuild job if installed.
 | `STATUSLINE_MODE=auto\|full\|compact` | `auto` (default) = adaptive layout; `full` = every segment at full text; `compact` = every segment at smallest variant |
 | `STATUSLINE_WIDTH=N` | Force terminal width (for testing) |
 | `STATUSLINE_WIDTH_MARGIN=N` | Cells subtracted from detected width before fitting (default `4` — Claude Code draws 2 cells of frame on each side of the pane). Set to `0` if using a host without margins. |
-| `STATUSLINE_DEBUG_WIDTH=1` | Persist width-detection trace to `/tmp` |
+| `STATUSLINE_DEBUG_WIDTH=1` | Persist width-detection trace to `/tmp` (`%TEMP%` on Windows) |
 
 ## Rate-limit probe for schedulers
 
@@ -168,6 +176,7 @@ claude-code-statusline/
 │   ├── anthropic.rs       # status.claude.com check (cached + bg refresh)
 │   ├── pace.rs            # 7-day rate-limit pace projection
 │   ├── probe.rs           # --usage-json / --wait-until quota probe for schedulers
+│   ├── platform.rs        # OS seam: home/tmp dirs, detached spawn, local midnight, console width
 │   ├── width.rs           # terminal-width detection (8 layered fallbacks)
 │   ├── layout.rs          # priority-tiered adaptive fit (full/compact/micro/drop)
 │   └── render.rs          # segment assembly
@@ -208,9 +217,13 @@ width=40  → Opus 4.7 · 78%/1m · $4.21
   terminals that don't support it.
 - `Config` reads every env var once at startup; nothing else touches env.
 - Four runtime deps total: `serde` + `serde_json` (JSON), `regex` (TODO/dest
-  patterns), `libc` (ioctl(TIOCGWINSZ) for ancestor-PTY width), `git2`
-  (libgit2 bindings, statically linked via vendored-libgit2 feature so the
-  resulting binary doesn't depend on a system libgit2).
+  patterns), `libc` (Unix only — ioctl(TIOCGWINSZ) for ancestor-PTY width,
+  setsid, localtime_r; Windows declares its few kernel32 calls by hand in
+  `platform.rs`), `git2` (libgit2 bindings, statically linked via
+  vendored-libgit2 feature so the resulting binary doesn't depend on a
+  system libgit2).
+- Everything OS-specific goes through `src/platform.rs`. New code must not
+  reach for `/tmp`, `$HOME`, `std::os::unix`, or `libc` directly.
 
 ## Performance
 

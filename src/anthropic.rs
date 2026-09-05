@@ -1,10 +1,11 @@
 //! Anthropic status page integration (status.claude.com).
 //!
-//! Cached 5 min in /tmp; refreshed by a detached background curl on miss/stale
-//! so the statusline itself never blocks on network. Self-healing across renders.
+//! Cached 5 min in the shared scratch dir (`/tmp` on Unix, `%TEMP%` on
+//! Windows); refreshed by a detached background curl on miss/stale so the
+//! statusline itself never blocks on network. Self-healing across renders.
 //!
 //! Race-free across concurrent CC sessions:
-//!   1. Each session's curl writes to `/tmp/cc-anthropic-status.json.<pid>.tmp`
+//!   1. Each session's curl writes to `<tmp>/cc-anthropic-status.json.<pid>.tmp`
 //!   2. On the next render, every session reconciles any tmp files by:
 //!      - validating their JSON
 //!      - atomically renaming valid ones onto the cache path
@@ -13,14 +14,20 @@
 //!   args, the rename is done by `fs::rename` (atomic POSIX rename).
 
 use std::fs;
-use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-const CACHE_PATH: &str = "/tmp/cc-anthropic-status.json";
+use crate::platform;
+
+const CACHE_NAME: &str = "cc-anthropic-status.json";
 const TMP_PREFIX: &str = "cc-anthropic-status.json.";
 const TMP_SUFFIX: &str = ".tmp";
 const TTL: Duration = Duration::from_secs(5 * 60);
+
+fn cache_path() -> PathBuf {
+    platform::shared_tmp_dir().join(CACHE_NAME)
+}
 
 /// Returns `None` when operational/unknown, or one of "minor" / "major" /
 /// "critical" when degraded.
@@ -36,7 +43,8 @@ pub fn anthropic_status() -> Option<String> {
 }
 
 fn read_cache() -> (Option<serde_json::Value>, bool) {
-    let metadata = match fs::metadata(CACHE_PATH) {
+    let path = cache_path();
+    let metadata = match fs::metadata(&path) {
         Ok(m) => m,
         Err(_) => return (None, true),
     };
@@ -44,18 +52,18 @@ fn read_cache() -> (Option<serde_json::Value>, bool) {
     let age = SystemTime::now().duration_since(modified).unwrap_or(TTL);
     let stale = age >= TTL;
 
-    let parsed = fs::read(CACHE_PATH)
+    let parsed = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
 
     (parsed, stale)
 }
 
-/// Walk `/tmp` for pending tmp files dropped by previous-render background
-/// curls. Validate each; promote valid ones to the cache via atomic rename;
-/// unlink invalid/partial ones.
+/// Walk the scratch dir for pending tmp files dropped by previous-render
+/// background curls. Validate each; promote valid ones to the cache via
+/// atomic rename; unlink invalid/partial ones.
 fn reconcile_pending_fetches() {
-    let Ok(entries) = fs::read_dir("/tmp") else { return };
+    let Ok(entries) = fs::read_dir(platform::shared_tmp_dir()) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -90,7 +98,7 @@ fn reconcile_pending_fetches() {
         match fs::read(&path) {
             Ok(bytes) if serde_json::from_slice::<serde_json::Value>(&bytes).is_ok() => {
                 // Atomic POSIX rename — never produces a half-visible cache file.
-                let _ = fs::rename(&path, CACHE_PATH);
+                let _ = fs::rename(&path, cache_path());
             }
             _ => {
                 let _ = fs::remove_file(&path);
@@ -104,27 +112,16 @@ fn reconcile_pending_fetches() {
 /// `reconcile_pending_fetches()` will promote the file to the cache once
 /// curl exits successfully.
 fn spawn_background_fetch() {
-    let tmp = format!("{}{}{}", CACHE_PATH, ".", std::process::id());
-    let tmp_full = format!("{}{}", tmp, TMP_SUFFIX);
+    let tmp_full = platform::shared_tmp_dir()
+        .join(format!("{}{}{}", TMP_PREFIX, std::process::id(), TMP_SUFFIX));
 
-    // SAFETY: pre_exec runs between fork and exec. Calling setsid() there is
-    // safe — it just detaches us from the parent process group so the child
-    // outlives this render even when the controlling terminal is closed.
-    let _ = unsafe {
-        Command::new("curl")
-            .args([
-                "-sL",
-                "-m", "5",
-                "-o", &tmp_full,
-                "https://status.claude.com/api/v2/status.json",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            })
-            .spawn()
-    };
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sL", "-m", "5", "-o"])
+        .arg(&tmp_full)
+        .arg("https://status.claude.com/api/v2/status.json")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Detached so the child outlives this render — see platform::spawn_detached.
+    let _ = platform::spawn_detached(&mut cmd);
 }

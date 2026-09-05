@@ -25,16 +25,20 @@
 //! local process via `ps`) — and never written to disk. Its charset is
 //! validated before interpolation so a tampered credentials file can't
 //! inject curl config directives. `curl` and `security` are invoked by
-//! absolute path so a hijacked `PATH` can't intercept the token.
+//! absolute path so a hijacked `PATH` can't intercept the token. On
+//! Windows there is no keychain store — CC keeps the credentials file
+//! only — and the system curl is `%SystemRoot%\System32\curl.exe`.
 //!
 //! State (cache + attempt marker) lives in a PER-USER private directory
 //! (`$TMPDIR`, which is `drwx------` on macOS, else `~/.cache/cc-statusline`
-//! created 0700), NOT world-writable `/tmp`. The contents are
-//! account-specific (this user's quota %), so — unlike pricing.rs's public
-//! machine-global cache — a shared path would leak data across users, let
-//! another user spoof the display, and expose the fixed paths to
-//! symlink-clobber attacks. Files are written 0600 and the tmp file uses
-//! `create_new` (O_EXCL) so a planted symlink is never followed.
+//! created 0700; `%LOCALAPPDATA%\cc-statusline` on Windows — see
+//! `platform::private_state_dir`), NOT world-writable `/tmp`. The contents
+//! are account-specific (this user's quota %), so — unlike pricing.rs's
+//! public machine-global cache — a shared path would leak data across
+//! users, let another user spoof the display, and expose the fixed paths to
+//! symlink-clobber attacks. Files are written 0600 (where the OS has mode
+//! bits) and the tmp file uses `create_new` (O_EXCL) so a planted symlink
+//! is never followed.
 //!
 //! The cache and the attempt marker are STAMPED with the active account
 //! (`oauthAccount.accountUuid` from `~/.claude.json`, which CC rewrites on
@@ -57,18 +61,20 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::platform;
+
 const CACHE_NAME: &str = "usage.json";
 const ATTEMPT_NAME: &str = "usage.attempt";
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-// System binaries at fixed absolute paths — invoked directly so a hijacked
-// PATH can't intercept the OAuth token (curl) or serve fake creds (security).
-const CURL_BIN: &str = "/usr/bin/curl";
+// The macOS keychain CLI at a fixed absolute path — invoked directly so a
+// hijacked PATH can't serve fake creds. (curl likewise: see
+// `platform::system_curl`.)
+#[cfg(unix)]
 const SECURITY_BIN: &str = "/usr/bin/security";
 /// Refresh cadence. The detached refresh runs at the today-rollup's 60s
 /// TTL; this keeps usage fetches to roughly one every 2 minutes.
@@ -145,8 +151,7 @@ fn current_account() -> Option<String> {
         #[serde(rename = "oauthAccount")]
         oauth_account: Option<OauthAccount>,
     }
-    let home = std::env::var("HOME").ok()?;
-    let path = format!("{home}/.claude.json");
+    let path = platform::home_dir()?.join(".claude.json");
     if fs::metadata(&path).ok()?.len() > ACCOUNT_FILE_MAX {
         return None;
     }
@@ -165,27 +170,13 @@ fn parse_cache(bytes: &[u8], current: Option<&str>) -> Option<ScopedWindows> {
     Some(cache.windows)
 }
 
-/// Per-user private state directory, resolved once. Prefers `$TMPDIR`
-/// (macOS: `/var/folders/.../T`, mode 0700, per-user), else creates
-/// `~/.cache/cc-statusline` with 0700. Returns `None` only when neither is
-/// available (no HOME, no TMPDIR) — callers then no-op rather than fall back
-/// to a shared world-writable path.
+/// Per-user private state directory, resolved once — see
+/// `platform::private_state_dir` for the per-OS choice. Returns `None` only
+/// when nothing usable is available — callers then no-op rather than fall
+/// back to a shared world-writable path.
 fn state_dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-    DIR.get_or_init(|| {
-        if let Some(tmp) = std::env::var_os("TMPDIR") {
-            let p = PathBuf::from(tmp);
-            if p.is_dir() {
-                return Some(p);
-            }
-        }
-        let home = std::env::var_os("HOME")?;
-        let dir = PathBuf::from(home).join(".cache/cc-statusline");
-        fs::create_dir_all(&dir).ok()?;
-        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-        Some(dir)
-    })
-    .as_ref()
+    DIR.get_or_init(platform::private_state_dir).as_ref()
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -211,9 +202,9 @@ fn fresh(path: &std::path::Path, ttl: Duration) -> bool {
     age_of(path).map(|age| age < ttl).unwrap_or(false)
 }
 
-/// Write `bytes` to `path` with mode 0600, refusing to follow a symlink
-/// (`create_new` on a fresh unique tmp, then atomic rename). The tmp is
-/// removed on any failure so nothing accumulates.
+/// Write `bytes` to `path` owner-only (0600 where the OS has mode bits),
+/// refusing to follow a symlink (`create_new` on a fresh unique tmp, then
+/// atomic rename). The tmp is removed on any failure so nothing accumulates.
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> Option<()> {
     use std::io::Write;
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
@@ -221,12 +212,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> Option<()> {
     // doesn't spuriously fail.
     let _ = fs::remove_file(&tmp);
     let result = (|| {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)
-            .ok()?;
+        let mut f = platform::create_private_new(&tmp).ok()?;
         f.write_all(bytes).ok()?;
         drop(f);
         fs::rename(&tmp, path).ok()
@@ -408,11 +394,12 @@ fn valid_token(creds: &serde_json::Value) -> Option<String> {
 }
 
 fn credentials_file() -> Option<serde_json::Value> {
-    let home = std::env::var("HOME").ok()?;
-    let bytes = fs::read(format!("{home}/.claude/.credentials.json")).ok()?;
+    let path = platform::home_dir()?.join(".claude").join(".credentials.json");
+    let bytes = fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
+#[cfg(unix)]
 fn keychain_credentials() -> Option<serde_json::Value> {
     let out = Command::new(SECURITY_BIN)
         .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
@@ -426,9 +413,15 @@ fn keychain_credentials() -> Option<serde_json::Value> {
     serde_json::from_slice(&out.stdout).ok()
 }
 
+/// No keychain store on Windows — CC writes only the credentials file.
+#[cfg(not(unix))]
+fn keychain_credentials() -> Option<serde_json::Value> {
+    None
+}
+
 fn fetch(token: &str) -> Option<Vec<u8>> {
     use std::io::Write;
-    let mut child = Command::new(CURL_BIN)
+    let mut child = Command::new(platform::system_curl())
         .args([
             "-sf",
             "--max-time",

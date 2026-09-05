@@ -27,12 +27,25 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
-const CACHE_PATH: &str = "/tmp/cc-statusline-pricing.json";
-const ATTEMPT_MARKER: &str = "/tmp/cc-statusline-pricing.attempt";
+use crate::platform;
+
+// Public, machine-global data — lives in the shared scratch dir (/tmp on
+// Unix, %TEMP% on Windows). See usage.rs for the private-dir contrast.
+const CACHE_NAME: &str = "cc-statusline-pricing.json";
+const ATTEMPT_NAME: &str = "cc-statusline-pricing.attempt";
+
+fn cache_path() -> PathBuf {
+    platform::shared_tmp_dir().join(CACHE_NAME)
+}
+
+fn attempt_marker() -> PathBuf {
+    platform::shared_tmp_dir().join(ATTEMPT_NAME)
+}
 const TTL: Duration = Duration::from_secs(24 * 3600);
 /// Min interval between fetch attempts. Without this, repeated failed
 /// fetches (LiteLLM down, no network) would spawn one curl per render
@@ -123,37 +136,35 @@ pub fn ensure_loaded_sync() {
 }
 
 fn cache_is_fresh() -> bool {
-    let Ok(metadata) = fs::metadata(CACHE_PATH) else { return false };
+    let Ok(metadata) = fs::metadata(cache_path()) else { return false };
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let age = SystemTime::now().duration_since(modified).unwrap_or(TTL);
     age < TTL
 }
 
 fn attempt_was_recent() -> bool {
-    let Ok(metadata) = fs::metadata(ATTEMPT_MARKER) else { return false };
+    let Ok(metadata) = fs::metadata(attempt_marker()) else { return false };
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let age = SystemTime::now().duration_since(modified).unwrap_or(RETRY_THROTTLE);
     age < RETRY_THROTTLE
 }
 
 fn touch_attempt_marker() {
-    let _ = fs::write(ATTEMPT_MARKER, b"");
+    let _ = fs::write(attempt_marker(), b"");
 }
 
 fn fetch_to_cache_sync() -> Result<(), ()> {
-    let pid = std::process::id();
-    let tmp = format!("{}.{}.tmp", CACHE_PATH, pid);
+    let cache = cache_path();
+    let tmp = platform::shared_tmp_dir()
+        .join(format!("{}.{}.tmp", CACHE_NAME, std::process::id()));
     let timeout = FETCH_TIMEOUT_SEC.to_string();
 
     // -L follows redirects (GitHub raw → AWS CDN), -f makes curl exit
     // non-zero on 4xx/5xx, -m bounds total time.
     let status = Command::new("curl")
-        .args([
-            "-sLf",
-            "-m", &timeout,
-            "-o", &tmp,
-            SOURCE_URL,
-        ])
+        .args(["-sLf", "-m", &timeout, "-o"])
+        .arg(&tmp)
+        .arg(SOURCE_URL)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -174,7 +185,7 @@ fn fetch_to_cache_sync() -> Result<(), ()> {
     }
 
     // Atomic POSIX rename — no half-visible cache file possible.
-    fs::rename(&tmp, CACHE_PATH).map_err(|_| ())
+    fs::rename(&tmp, &cache).map_err(|_| ())
 }
 
 /// Look up pricing for a model id. Tries:
@@ -207,7 +218,7 @@ pub fn lookup(model: &str) -> Option<Pricing> {
 
 fn parsed_cache() -> Option<&'static HashMap<String, Pricing>> {
     let map = PARSED.get_or_init(|| {
-        match fs::read(CACHE_PATH) {
+        match fs::read(cache_path()) {
             Ok(bytes) => parse_litellm_json(&bytes).unwrap_or_default(),
             Err(_) => HashMap::new(),
         }

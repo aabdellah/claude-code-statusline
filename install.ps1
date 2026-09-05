@@ -16,6 +16,9 @@
 #   4. Patches $HOME\.claude\settings.json with the statusLine block,
 #      preserving every other key
 #
+# Keep this file ASCII-only: Windows PowerShell 5.1 reads a BOM-less script
+# as ANSI, and a stray em-dash or arrow turns into a parse error.
+#
 # Note on the auto-rebuild add-on: on Windows we register a Scheduled Task
 # running cargo-watch in the background. This is conceptually identical to
 # the macOS LaunchAgent / Linux systemd unit; the underlying tool runs the
@@ -91,7 +94,7 @@ Then re-run this script.
 }
 
 # --- Build ------------------------------------------------------------------
-Write-Host "==> Building release binary (libgit2 vendored — first build ~30-60s)..."
+Write-Host "==> Building release binary (libgit2 vendored - first build ~30-60s)..."
 Push-Location $RepoDir
 try {
     cargo build --release
@@ -117,12 +120,12 @@ try {
     # is live" semantics matching the macOS/Linux installers.
     New-Item -ItemType SymbolicLink -Path $BinTarget -Target $BinSource | Out-Null
     Write-Host "==> Symlinked  $BinTarget"
-    Write-Host "             → $BinSource"
+    Write-Host "             -> $BinSource"
 } catch {
     Copy-Item -Path $BinSource -Destination $BinTarget -Force
     Write-Host "==> Copied     $BinSource"
-    Write-Host "             → $BinTarget"
-    Write-Host "    (symlink failed — enable Developer Mode to get live-rebuild updates;"
+    Write-Host "             -> $BinTarget"
+    Write-Host "    (symlink failed - enable Developer Mode to get live-rebuild updates;"
     Write-Host "     otherwise re-run install.ps1 after rebuilds)"
 }
 
@@ -136,10 +139,13 @@ if (-not (Test-Path $Settings)) {
 
 $data = Get-Content $Settings -Raw | ConvertFrom-Json
 
-# Build the statusLine object — overwrite (idempotent), preserve other keys.
+# Build the statusLine object - overwrite (idempotent), preserve other keys.
+# CC runs the command through Git Bash when present, else PowerShell. An
+# absolute path with forward slashes is the one form both accept: Git Bash
+# eats unquoted backslashes, and PowerShell parses "$HOME/..." as a division.
 $newStatusLine = [PSCustomObject]@{
     type    = 'command'
-    command = '$HOME/.claude/bin/cc-statusline.exe'
+    command = ($BinTarget -replace '\\', '/')
 }
 
 if ($data.PSObject.Properties.Name -contains 'statusLine') {

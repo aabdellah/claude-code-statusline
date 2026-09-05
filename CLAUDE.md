@@ -46,6 +46,18 @@ cargo build --release
   Glyph-prefixed counts (●3, ↑5, #247) and atomic values ($4.21, 47m,
   model names) DON'T use repr — they're inline by design.
 
+- **`src/platform.rs`** — the ONLY place that touches an OS-specific
+  API. Home dir (`$HOME` / `%USERPROFILE%`), the shared scratch dir
+  (`/tmp` / `%TEMP%`), the private state dir (`$TMPDIR` or
+  `~/.cache/cc-statusline` / `%LOCALAPPDATA%\cc-statusline`), detached
+  spawns (`setsid` / `DETACHED_PROCESS`), local midnight (`localtime_r`
+  / `TzSpecificLocalTimeToSystemTime`), console width, and 0600 file
+  creation all go through it. `libc` is a `cfg(unix)` dependency; the
+  Windows side hand-declares its four kernel32 entry points. Reaching
+  for `/tmp`, `std::env::var("HOME")`, `std::os::unix`, or `libc` from
+  any other module breaks the Windows build — that's how the crate was
+  Unix-only for its first year despite shipping an `install.ps1`.
+
 ## Gotchas (the schema-drift bugs and friends)
 
 - **`exceeds_200k_tokens` is at the TOP LEVEL of CC's input JSON**, not

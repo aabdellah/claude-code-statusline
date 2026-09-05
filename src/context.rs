@@ -245,8 +245,10 @@ impl<'a> RenderContext<'a> {
 /// output styles (currently "learning" and "explanatory"). I/O lives in
 /// `RenderContext::build` so segments stay pure.
 fn read_plugin_styles() -> Vec<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let settings_path = format!("{}/.claude/settings.json", home);
+    let Some(home) = crate::platform::home_dir() else {
+        return Vec::new();
+    };
+    let settings_path = home.join(".claude").join("settings.json");
     let Ok(content) = std::fs::read_to_string(&settings_path) else {
         return Vec::new();
     };

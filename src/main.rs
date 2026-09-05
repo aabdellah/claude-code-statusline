@@ -14,6 +14,7 @@ mod git;
 mod input;
 mod layout;
 mod pace;
+mod platform;
 mod pricing;
 mod probe;
 mod render;
@@ -57,19 +58,22 @@ fn main() {
     let mut buf = Vec::with_capacity(4096);
     let _ = io::stdin().read_to_end(&mut buf);
 
-    // STATUSLINE_DUMP_INPUT=1 — write the raw JSON to /tmp for inspection.
-    // Used to discover new CC schema fields we're not yet consuming.
-    // Path includes session_id to avoid races between concurrent CC sessions
-    // all writing to the same file. Also keeps overwriting the legacy path
-    // for back-compat with any tooling that reads it.
+    // STATUSLINE_DUMP_INPUT=1 — write the raw JSON to the scratch dir (/tmp
+    // on Unix, %TEMP% on Windows) for inspection. Used to discover new CC
+    // schema fields we're not yet consuming. Path includes session_id to
+    // avoid races between concurrent CC sessions all writing to the same
+    // file. Also keeps overwriting the legacy path for back-compat with any
+    // tooling that reads it.
     if std::env::var("STATUSLINE_DUMP_INPUT").as_deref() == Ok("1") {
-        let _ = std::fs::write("/tmp/cc-statusline-input.json", &buf);
+        let tmp = platform::shared_tmp_dir();
+        let _ = std::fs::write(tmp.join("cc-statusline-input.json"), &buf);
         let sid = serde_json::from_slice::<serde_json::Value>(&buf)
             .ok()
             .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(String::from));
         if let Some(sid) = sid {
-            let _ = std::fs::create_dir_all("/tmp/cc-statusline-dumps");
-            let _ = std::fs::write(format!("/tmp/cc-statusline-dumps/{}.json", sid), &buf);
+            let dumps = tmp.join("cc-statusline-dumps");
+            let _ = std::fs::create_dir_all(&dumps);
+            let _ = std::fs::write(dumps.join(format!("{}.json", sid)), &buf);
         }
     }
 
