@@ -1,13 +1,13 @@
 # Claude Code Statusline
 
 A statusline tuned for power-user / multi-agent / 1M-context / parallel-worktree
-workflows. Renders model · repo · context · effort · rate limits · cache ·
+workflows. Renders model · effort · repo · context · rate limits · cache ·
 cost · perf · duration into a single scannable line, with a compact fallback
 for narrow terminals and red separators when multiple red signals fire at once.
 
 ```
-Opus 4.7 · banknet2-retail/main ●3 ↑2 wt:5 2stale #247 · todo +4 ·
-ctx 78% ████████░░ 1m · xhigh · 5h 64%→1h12m 7d 71%→98% ·
+Opus 4.7 · xhigh · banknet2-retail/main ●3 ↑2 wt:5 2stale #247 · todo +4 ·
+ctx 78% ████████░░ 1m · 5h 64%→1h12m 7d 71%→98% ·
 cache 84% · $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 41% · 47m
 ```
 
@@ -200,10 +200,10 @@ segments until the line fits the detected terminal width.
 Example degradation for a session in a git repo with cost data:
 
 ```
-width=220 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · 5h 64% 7d 71% · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
-width=130 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
-width=100 → Opus 4.7 · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · medium · $4.2 $5.4/h +247/-89
-width=80  → Opus 4.7 · claude/main ○3+1 · ctx 78% ████████░░ 1m · medium · $4.21
+width=220 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · 5h 64% 7d 71% · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=130 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · cache 84% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=100 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · $4.2 $5.4/h +247/-89
+width=80  → Opus 4.7 · medium · claude/main ○3+1 · ctx 78% ████████░░ 1m · $4.21
 width=60  → Opus 4.7 · main ○3+1 · 78%/1m · medium · $4.21
 width=40  → Opus 4.7 · 78%/1m · $4.21
 ```

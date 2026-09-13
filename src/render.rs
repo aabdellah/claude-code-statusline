@@ -8,10 +8,11 @@
 //!      separators are tinted red — the colored segments themselves carry
 //!      the alarm, so there is no textual banner eating width.
 //!
-//! Layout (at full width):
-//!   model · repo/branch +flags+stash ↑↓ [wt←origin] wt:N #PR · todo Δ ·
-//!   ctx % [gradient bar] · ⚡effort 🧠 · ◆style · 5h N% · cache N% ·
-//!   $X $Y/h +A/-B · Nt/s · dur
+//! Layout (at full width), grouped by the question each block answers:
+//!   model ⚡effort ◆style · claude:status ·
+//!   repo/branch +flags+stash ↑↓ [wt←origin] wt:N #PR · todo Δ · yak · rm ·
+//!   ctx % [gradient bar] · 5h N% 7d N% · cache N% · $X $Y/h +A/-B · today $ ·
+//!   Nt/s · api % · dur
 //!
 //! All per-segment logic lives in `src/segments/`. To add a new segment,
 //! drop in a file with `pub fn render(ctx: &RenderContext) -> Option<Seg>`

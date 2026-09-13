@@ -60,20 +60,26 @@ use crate::layout::Seg;
 ///
 /// All entries have the same signature `fn(&RenderContext) -> Option<Seg>`.
 pub static FUNCS: &[fn(&RenderContext) -> Option<Seg>] = &[
+    // What am I running
     model::render,
-    anthropic::render,
-    repo::render,
-    destruction::render,
-    todo::render,
-    cwd_drift::render,
-    yak::render,
-    context::render,
     capabilities::render,
     output_style::render,
+    // Is the service ok
+    anthropic::render,
+    // Where am I working
+    repo::render,
+    cwd_drift::render,
+    todo::render,
+    yak::render,
+    destruction::render,
+    // How much room is left
+    context::render,
     rate_limits::render,
+    // What is it costing
     cache::render,
     cost::render,
     today_spend::render,
+    // How fast, how long
     perf::render,
     api_time::render,
     duration::render,
