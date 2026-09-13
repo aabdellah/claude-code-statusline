@@ -317,7 +317,7 @@ mod tests {
     fn idle_scoped_windows_late_in_week_do_not_red() {
         // Idle model-scoped windows (0% used) late in the week project to 0%
         // — the account-wide underpace rule must NOT apply to them, or three
-        // unused scoped windows alone would trip the CRIT banner on a
+        // unused scoped windows alone would trip the red-separator alarm on a
         // perfectly healthy session.
         let day_and_a_half = 36 * 3600; // frac ≈ 0.786, past the 0.70 gate
         let input = input_with(RateLimits {

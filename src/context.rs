@@ -43,9 +43,6 @@ pub struct RenderContext<'a> {
     pub yak_depth: u32,
     /// Count of destructive Bash invocations in the visible transcript tail.
     pub destruction_count: u32,
-    /// Approximated cache TTL (ms) remaining in Anthropic's 5-minute prompt
-    /// cache window. `None` when no timestamped entries exist.
-    pub cache_ttl_ms: Option<i64>,
     /// Output tok/s rate from the most recent assistant turn.
     pub tok_rate: Option<f64>,
     /// Approximate first-token latency (ms) for the most recent assistant turn.
@@ -135,7 +132,6 @@ impl<'a> RenderContext<'a> {
         } else {
             0
         };
-        let cache_ttl_ms = transcript::cache_ttl_ms_remaining(&transcript);
         let tok_rate = transcript::last_turn_output_rate(&transcript);
         let ftl_ms = config::timed("ftl", cfg.debug_timing, || {
             transcript::first_token_latency_ms(&transcript)
@@ -182,7 +178,7 @@ impl<'a> RenderContext<'a> {
             in_repo, in_worktree, branch,
             git_status, worktree_stats,
             today,
-            yak_depth, destruction_count, cache_ttl_ms, tok_rate, ftl_ms,
+            yak_depth, destruction_count, tok_rate, ftl_ms,
             todo_delta, plugin_styles, oauth_scoped,
         }
     }
@@ -231,7 +227,6 @@ impl<'a> RenderContext<'a> {
             today: None,
             yak_depth: 0,
             destruction_count: 0,
-            cache_ttl_ms: None,
             tok_rate: None,
             ftl_ms: None,
             todo_delta: 0,

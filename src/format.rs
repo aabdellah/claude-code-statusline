@@ -102,14 +102,6 @@ pub fn fmt_duration_compact(ms: u64) -> Option<String> {
     Some(format!("{}h", m / 60))
 }
 
-pub fn fmt_ttl(ms: i64) -> Option<String> {
-    if ms <= 0 { return None; }
-    let sec = ms / 1000;
-    let m = sec / 60;
-    let s = sec % 60;
-    Some(format!("{}:{:02}", m, s))
-}
-
 /// CC sends `resets_at` as Unix seconds; older docs said ISO string. Accept
 /// both shapes. Returns "" (empty string) on any parse failure / past time,
 /// matching the Node version's behavior of producing a falsy value.
@@ -501,16 +493,6 @@ mod tests {
         // ≥10s: rounded integer (decimal noise no longer meaningful).
         assert_eq!(fmt_ftl(15_700.0).as_deref(), Some("ftl 16s"));
         assert_eq!(fmt_ftl(f64::NAN), None);
-    }
-
-    #[test]
-    fn ttl_zero_or_negative_is_none() {
-        assert_eq!(fmt_ttl(0), None);
-        assert_eq!(fmt_ttl(-5), None);
-        // 47s → 0:47
-        assert_eq!(fmt_ttl(47_000).as_deref(), Some("0:47"));
-        // 2m 3s → 2:03 (note zero-pad on seconds)
-        assert_eq!(fmt_ttl(123_000).as_deref(), Some("2:03"));
     }
 
     #[test]

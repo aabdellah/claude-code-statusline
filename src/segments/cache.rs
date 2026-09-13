@@ -1,65 +1,79 @@
-//! Cache hit % + TTL countdown.
-//!   full     "cache 84% ttl 2:47"
-//!   compact  "c:84 2:47"
+//! Prompt-cache hit ratio for the latest API call.
+//!   full     "cache 84%"
+//!   compact  "c:84"
 //!
-//! TTL comes from the most recent timestamped transcript entry — Anthropic's
-//! prompt cache window is 5 minutes from each cache touch. When the TTL drops
-//! below 60s the color goes red.
+//! hit% = cache_read / (input + cache_creation + cache_read)
+//!
+//! The denominator is EVERY input token of the call, not just the cached
+//! ones: `input_tokens` are the uncached misses billed at the full rate,
+//! `cache_creation_input_tokens` are misses billed at the write premium,
+//! `cache_read_input_tokens` are the hits billed at the ~10% read rate.
+//! Dividing by read+create alone (the previous formula) reported 100% on a
+//! call that was mostly uncached input.
+//!
+//! No TTL countdown: CC renders the statusline only at turn boundaries, so
+//! a countdown could never tick while the user sat idle — it was a frozen
+//! number by the time anyone looked at it.
 
-use crate::ansi::{GREEN, RED, RESET, YELLOW};
+use crate::ansi::{GREEN, RED, YELLOW};
 use crate::context::RenderContext;
-use crate::format::fmt_ttl;
 use crate::layout::{Priority, Seg};
 use crate::repr;
+
+/// Hit ratio in percent, or `None` when the call had no input tokens at all.
+pub fn hit_pct(input: u64, cache_create: u64, cache_read: u64) -> Option<f64> {
+    let total = input.saturating_add(cache_create).saturating_add(cache_read);
+    if total == 0 {
+        return None;
+    }
+    Some(cache_read as f64 / total as f64 * 100.0)
+}
 
 pub fn render(ctx: &RenderContext) -> Option<Seg> {
     let usage = ctx
         .input
         .context_window
         .as_ref()
-        .and_then(|cw| cw.current_usage.as_ref());
-    let cache_read = usage.and_then(|u| u.cache_read_input_tokens).unwrap_or(0);
-    let cache_create = usage.and_then(|u| u.cache_creation_input_tokens).unwrap_or(0);
-    let cache_total = cache_read + cache_create;
-    let ttl_ms = ctx.cache_ttl_ms;
+        .and_then(|cw| cw.current_usage.as_ref())?;
+    let input = usage.input_tokens.unwrap_or(0);
+    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+    let cache_create = usage.cache_creation_input_tokens.unwrap_or(0);
+    let pct = hit_pct(input, cache_create, cache_read)?;
 
-    let mut full_bits: Vec<String> = Vec::new();
-    let mut compact_bits: Vec<String> = Vec::new();
+    let col = if pct >= 80.0 {
+        GREEN
+    } else if pct >= 50.0 {
+        YELLOW
+    } else {
+        RED
+    };
+    let (full, compact) = repr::percent("cache", "c", pct, col);
+    Some(Seg::new("cache", Priority::Normal, full).with_compact(compact))
+}
 
-    if cache_total > 0 {
-        let hit_pct = cache_read as f64 / cache_total as f64 * 100.0;
-        let col = if hit_pct >= 80.0 {
-            GREEN
-        } else if hit_pct >= 50.0 {
-            YELLOW
-        } else {
-            RED
-        };
-        let (full, compact) = repr::percent("cache", "c", hit_pct, col);
-        full_bits.push(full);
-        compact_bits.push(compact);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uncached_input_counts_as_misses() {
+        // 50k uncached + 10k read: old formula said 100%, truth is ~16.7%.
+        let pct = hit_pct(50_000, 0, 10_000).unwrap();
+        assert!((pct - 16.67).abs() < 0.01, "{pct}");
     }
 
-    if let Some(ms) = ttl_ms
-        && let Some(ttl_str) = fmt_ttl(ms)
-    {
-        let ttl_color = if ms < 60_000 {
-            RED
-        } else if ms < 180_000 {
-            YELLOW
-        } else {
-            GREEN
-        };
-        full_bits.push(format!("{}ttl {}{}", ttl_color, ttl_str, RESET));
-        compact_bits.push(format!("{}{}{}", ttl_color, ttl_str, RESET));
+    #[test]
+    fn cache_writes_count_as_misses() {
+        assert!((hit_pct(0, 20_000, 80_000).unwrap() - 80.0).abs() < 1e-9);
     }
 
-    if full_bits.is_empty() {
-        return None;
+    #[test]
+    fn no_input_tokens_hides_segment() {
+        assert_eq!(hit_pct(0, 0, 0), None);
     }
 
-    Some(
-        Seg::new("cache", Priority::Normal, full_bits.join(" "))
-            .with_compact(compact_bits.join(" ")),
-    )
+    #[test]
+    fn fully_cached_call_is_100() {
+        assert!((hit_pct(0, 0, 1).unwrap() - 100.0).abs() < 1e-9);
+    }
 }

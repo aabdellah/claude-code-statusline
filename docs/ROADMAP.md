@@ -52,8 +52,7 @@ where it lives.
 | 7d limit + pace projection | `src/pace.rs` :: `seven_day_pace` | Asymmetric 92-105% green band; needs ≥10% of window elapsed |
 | Fable 5 dedicated weekly (+ Opus/Sonnet scoped) | `src/segments/rate_limits.rs` :: `weekly_window` + `src/usage.rs` | `fable 42% →98%` / `f5:42/98`; same pace math as 7d, but no underpace red (idle scoped windows aren't a problem). Sourced from `rate_limits.seven_day_overage_included` when CC forwards it (not yet as of v2.1.201 — see CLAUDE.md gotcha); until then bridged from `GET /api/oauth/usage` via the detached refresh (cache `/tmp/cc-statusline-usage.json`, 120s TTL; opt out `STATUSLINE_USAGE_SOURCE=off`). |
 | Quota probe for schedulers | `src/probe.rs` | `--usage-json` (all `/api/oauth/usage` windows + 5h/7d pace, account-stamped 120 s cache) and `--wait-until '5h<85,7d<92,fable<95,pace<105'` (blocks; polls 5 min or the nearest reset; 10 s slices re-read the account so a `/login` wakes it). Built for Workflow gates on the Studio-bound Shell programme. |
-| Cache hit % | `src/render.rs` | From `cw.current_usage` cache_read/create |
-| Cache TTL countdown | `src/transcript.rs` :: `cache_ttl_ms_remaining` | 5min window from last timestamped transcript entry |
+| Cache hit % | `src/segments/cache.rs` :: `hit_pct` | `cache_read / (input + cache_creation + cache_read)` from `cw.current_usage` — uncached input counts as misses. (TTL countdown removed: CC only renders at turn boundaries, so it could never tick.) |
 | Cost (total) | `src/format.rs` :: `fmt_money` | `$1.23` / `$24` / `$1.0k` (compact) |
 | Burn rate | `src/format.rs` :: `fmt_burn_rate` | Needs ≥30s session duration for stable rate |
 | Lines +/- | `src/render.rs` | From `cost.total_lines_added/removed` |
@@ -68,7 +67,7 @@ where it lives.
 | Output tok/s | `src/transcript.rs` :: `last_turn_output_rate` | Bounded to [0.5s, 1h] turn duration |
 | First-token latency | `src/transcript.rs` :: `first_token_latency_ms` | Approximation: turn_time − (tokens/150 t/s); ≥2s threshold |
 | Session duration | `src/format.rs` :: `fmt_duration` | `47m12s` / `3h12m` (compact: `47m` / `3h`) |
-| Anthropic status | `src/anthropic.rs` | Cached 5min in /tmp; detached background curl + atomic rename via reconcile-on-next-render |
+| Claude Code status | `src/anthropic.rs` | Reads `components.json` and only the "Claude Code" component (page-wide indicator fires for claude.ai/Cowork too). Cached 5min in /tmp; detached background curl + atomic rename via reconcile-on-next-render |
 
 ### Behavioral / agent signals
 
@@ -76,7 +75,7 @@ where it lives.
 |---|---|---|
 | Yak shave depth | `src/transcript.rs` :: `yak_depth` | Walks sourceToolAssistantUUID chain; `yak~~:3` with growing tildes |
 | Destruction counter | `src/transcript.rs` :: `destruction_count` | rm / unlink / truncate / DROP / --force / --hard |
-| CRIT banner + red tint | `src/render.rs` | Fires at ≥3 simultaneous red signals; recolors separators |
+| Red-tint alarm | `src/render.rs` | ≥3 simultaneous red signals recolor the separators red (no textual banner — the colored segments already carry it) |
 
 ### Plumbing
 
@@ -248,7 +247,7 @@ Live, plausible ideas — not next-up but worth keeping warm.
 - **libgit2 (via `git2` crate, statically linked):** dirty/stash/ahead-behind,
   worktree enumeration, diff for TODO delta. No subprocess overhead — direct
   C library calls from the binary.
-- **External HTTP (cached):** `status.claude.com/api/v2/status.json` via a
+- **External HTTP (cached):** `status.claude.com/api/v2/components.json` via a
   detached background `curl`; result picked up by the next render's
   reconcile step. No blocking on network in the render hot path.
 - **Derived math:** burn rate, tok/s, $/LOC, mileage, pace projection, FTL.

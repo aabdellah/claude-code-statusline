@@ -12,12 +12,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::OnceLock;
-use std::time::SystemTime;
 
 use crate::format::parse_rfc3339_ms;
 
 const DEFAULT_TAIL_BYTES: u64 = 256 * 1024;
-const CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 /// ~150 tok/s steady-state streaming. Used to approximate FTL = turn_time -
 /// streaming_time. An overestimate of the stream rate makes our FTL more
 /// conservative (smaller); an underestimate makes it more eager.
@@ -60,25 +58,6 @@ fn read_transcript_tail_n(transcript_path: Option<&str>, max_bytes: u64) -> Vec<
         }
     }
     entries
-}
-
-/// Anthropic's prompt cache window is 5 minutes, refreshed on each cache touch.
-/// We approximate "time since last cache touch" by the latest entry that
-/// carries a `timestamp` field (not every entry does — 'last-prompt', 'ai-title'
-/// don't). Returns ms remaining (can be negative — caller decides what to do).
-pub fn cache_ttl_ms_remaining(entries: &[Value]) -> Option<i64> {
-    let now_ms = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_millis()).ok())?;
-    for e in entries.iter().rev() {
-        if let Some(ts) = e.get("timestamp").and_then(|v| v.as_str())
-            && let Some(t) = parse_rfc3339_ms(ts)
-        {
-            return Some(CACHE_TTL_MS - (now_ms - t));
-        }
-    }
-    None
 }
 
 struct LastTurn {

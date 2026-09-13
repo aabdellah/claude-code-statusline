@@ -74,7 +74,7 @@ pub fn signed_delta(
 
 /// Labeled discrete-state status: a non-numeric value paired with a label.
 ///
-/// Examples: `anthropic:critical` / `anth:cri` ; (future: `tier:standard`).
+/// Examples: `claude:outage` / `cc:out` ; (future: `tier:standard`).
 /// Both variants use the colon separator — value is a discrete state, not a
 /// quantity, so the colon's "is" semantic reads correctly.
 pub fn labeled_status(

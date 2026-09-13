@@ -32,9 +32,9 @@ pub enum Priority {
 /// back to under width pressure.
 ///
 /// `red_count` is the number of "red signals" this segment contributes
-/// to the global CRIT counter — most segments contribute 0 or 1, but some
+/// to the global counter — most segments contribute 0 or 1, but some
 /// (repo with multiple problems, context with both >85% AND >200k) can
-/// contribute up to 3. A CRIT banner fires when total red_signals ≥ 3.
+/// contribute up to 3. At ≥3 total the separators are tinted red.
 #[derive(Debug, Clone)]
 pub struct Seg {
     pub id: &'static str,

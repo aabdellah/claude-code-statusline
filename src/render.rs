@@ -3,20 +3,21 @@
 //! Three steps:
 //!   1. Build a `RenderContext` (one-shot I/O)
 //!   2. Iterate `segments::FUNCS`, pushing each non-None `Seg` into the bag
-//!   3. Detect terminal width, subtract host margin + CRIT prefix room,
-//!      `bag.fit()` the segments to the available budget, prepend CRIT
-//!      if ≥3 red signals fired.
+//!   3. Detect terminal width, subtract the host margin, `bag.fit()` the
+//!      segments to the available budget. When ≥3 red signals fired the
+//!      separators are tinted red — the colored segments themselves carry
+//!      the alarm, so there is no textual banner eating width.
 //!
 //! Layout (at full width):
 //!   model · repo/branch +flags+stash ↑↓ [wt←origin] wt:N #PR · todo Δ ·
-//!   ctx % [gradient bar] · ⚡effort 🧠 · ◆style · 5h N% · cache N% ttl m:ss ·
+//!   ctx % [gradient bar] · ⚡effort 🧠 · ◆style · 5h N% · cache N% ·
 //!   $X $Y/h +A/-B · Nt/s · dur
 //!
 //! All per-segment logic lives in `src/segments/`. To add a new segment,
 //! drop in a file with `pub fn render(ctx: &RenderContext) -> Option<Seg>`
 //! and register it in `segments::mod::FUNCS`. No changes to this file needed.
 
-use crate::ansi::{self, BOLD, DIM, RED, RESET};
+use crate::ansi::{self, DIM, RED, RESET};
 use crate::config::{self, Config, Mode};
 use crate::context::RenderContext;
 use crate::input::StatusInput;
@@ -47,10 +48,10 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         width::detect_term_width(cfg)
     });
 
-    // When 3+ red signals are present we prepend a CRIT banner and recolor
-    // separators red. We pick the separator UP FRONT so the fitter operates
-    // on the final string — no post-hoc String::replace, which would mutate
-    // segment content if a segment ever embedded the separator's byte sequence.
+    // When 3+ red signals are present we recolor the separators red. We pick
+    // the separator UP FRONT so the fitter operates on the final string — no
+    // post-hoc String::replace, which would mutate segment content if a
+    // segment ever embedded the separator's byte sequence.
     let crit_active = bag.red_signals >= 3;
     let sep = if crit_active {
         format!(" {}·{} ", RED, RESET)
@@ -58,31 +59,13 @@ pub fn render(input: &StatusInput, cfg: &Config) -> RenderOutput {
         format!(" {}·{} ", DIM, RESET)
     };
 
-    // Subtract host margin (CC frame, etc.) and CRIT prefix room from the budget.
-    let crit_prefix = format!("{}{}CRIT{}{}", BOLD, RED, bag.red_signals, RESET);
-    let crit_prefix_visible_usize =
-        ansi::visible_length(&crit_prefix) + ansi::visible_length(&sep);
-    // Cap at u16::MAX rather than truncate via `as u16`. Realistic values
-    // are <20, but defense against unforeseen large red_signals counts.
-    let crit_prefix_visible = crit_prefix_visible_usize.min(u16::MAX as usize) as u16;
-    let effective_width = term_width.map(|w| {
-        let mut budget = w.saturating_sub(cfg.width_margin);
-        if crit_active {
-            budget = budget.saturating_sub(crit_prefix_visible);
-        }
-        budget
-    });
+    // Subtract host margin (CC frame, etc.) from the budget.
+    let effective_width = term_width.map(|w| w.saturating_sub(cfg.width_margin));
 
     let fit = bag.fit(effective_width, &sep);
 
-    let chosen = if crit_active {
-        format!("{}{}{}", crit_prefix, sep, fit.line)
-    } else {
-        fit.line
-    };
-
     RenderOutput {
-        line: chosen,
+        line: fit.line,
         term_width,
         variant_counts: (
             fit.full_count,

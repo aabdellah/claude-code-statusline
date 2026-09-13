@@ -143,11 +143,11 @@ mod imp {
         }
         // Single shared cache (legacy fallback).
         if let Ok(s) = fs::read_to_string("/tmp/cc-term-width") {
-            if let Ok(n) = s.trim().parse::<u16>() {
-                if n > 0 {
-                    trace.insert("shared_cache", n.to_string());
-                    return Some(n);
-                }
+            if let Ok(n) = s.trim().parse::<u16>()
+                && n > 0
+            {
+                trace.insert("shared_cache", n.to_string());
+                return Some(n);
             }
         } else {
             trace.insert("shared_cache", "missing".into());

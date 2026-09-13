@@ -1,11 +1,17 @@
 //! Anthropic status page integration (status.claude.com).
 //!
+//! We read the per-component list (`components.json`) and look ONLY at the
+//! "Claude Code" component. The page-wide `status.json` indicator turns
+//! "minor"/"major" for ANY product on the page (claude.ai, Cowork, Console,
+//! Government…), which made the segment nag about outages that could not
+//! affect a CC session.
+//!
 //! Cached 5 min in the shared scratch dir (`/tmp` on Unix, `%TEMP%` on
 //! Windows); refreshed by a detached background curl on miss/stale so the
 //! statusline itself never blocks on network. Self-healing across renders.
 //!
 //! Race-free across concurrent CC sessions:
-//!   1. Each session's curl writes to `<tmp>/cc-anthropic-status.json.<pid>.tmp`
+//!   1. Each session's curl writes to `<tmp>/cc-anthropic-components.json.<pid>.tmp`
 //!   2. On the next render, every session reconciles any tmp files by:
 //!      - validating their JSON
 //!      - atomically renaming valid ones onto the cache path
@@ -21,8 +27,12 @@ use std::time::{Duration, SystemTime};
 
 use crate::platform;
 
-const CACHE_NAME: &str = "cc-anthropic-status.json";
-const TMP_PREFIX: &str = "cc-anthropic-status.json.";
+const CACHE_NAME: &str = "cc-anthropic-components.json";
+const TMP_PREFIX: &str = "cc-anthropic-components.json.";
+/// Statuspage component name we care about. Matched case-insensitively on
+/// the trimmed name so cosmetic renames ("Claude Code (CLI)") keep matching
+/// via prefix.
+const COMPONENT_NAME: &str = "claude code";
 const TMP_SUFFIX: &str = ".tmp";
 const TTL: Duration = Duration::from_secs(5 * 60);
 
@@ -30,17 +40,31 @@ fn cache_path() -> PathBuf {
     platform::shared_tmp_dir().join(CACHE_NAME)
 }
 
-/// Returns `None` when operational/unknown, or one of "minor" / "major" /
-/// "critical" when degraded.
+/// Returns `None` when the Claude Code component is operational / unknown,
+/// or its Statuspage status string when degraded: one of
+/// "degraded_performance" / "partial_outage" / "major_outage" /
+/// "under_maintenance".
 pub fn anthropic_status() -> Option<String> {
     reconcile_pending_fetches();
     let (cached, stale) = read_cache();
     if stale {
         spawn_background_fetch();
     }
-    let cached = cached?;
-    let indicator = cached.get("status")?.get("indicator")?.as_str()?;
-    if indicator == "none" { None } else { Some(indicator.to_string()) }
+    claude_code_status(&cached?)
+}
+
+/// Pure extraction from a `components.json` payload. Only the component
+/// named "Claude Code" counts; every other product's status is ignored.
+pub fn claude_code_status(doc: &serde_json::Value) -> Option<String> {
+    let components = doc.get("components")?.as_array()?;
+    let comp = components.iter().find(|c| {
+        c.get("name")
+            .and_then(|n| n.as_str())
+            .map(|n| n.trim().to_lowercase().starts_with(COMPONENT_NAME))
+            .unwrap_or(false)
+    })?;
+    let status = comp.get("status")?.as_str()?;
+    if status == "operational" { None } else { Some(status.to_string()) }
 }
 
 fn read_cache() -> (Option<serde_json::Value>, bool) {
@@ -117,10 +141,53 @@ fn spawn_background_fetch() {
     let mut cmd = Command::new("curl");
     cmd.args(["-sL", "-m", "5", "-o"])
         .arg(&tmp_full)
-        .arg("https://status.claude.com/api/v2/status.json")
+        .arg("https://status.claude.com/api/v2/components.json")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // Detached so the child outlives this render — see platform::spawn_detached.
     let _ = platform::spawn_detached(&mut cmd);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn doc(cc: &str, other: &str) -> serde_json::Value {
+        json!({
+            "status": {"indicator": "minor"},
+            "components": [
+                {"name": "claude.ai", "status": other},
+                {"name": "Claude Code", "status": cc},
+                {"name": "Claude Cowork", "status": other},
+            ]
+        })
+    }
+
+    #[test]
+    fn other_products_degraded_does_not_fire() {
+        // Page-wide indicator says "minor" but Claude Code itself is fine.
+        assert_eq!(claude_code_status(&doc("operational", "major_outage")), None);
+    }
+
+    #[test]
+    fn claude_code_degraded_fires_with_its_own_status() {
+        assert_eq!(
+            claude_code_status(&doc("partial_outage", "operational")).as_deref(),
+            Some("partial_outage")
+        );
+    }
+
+    #[test]
+    fn missing_component_list_is_none() {
+        assert_eq!(claude_code_status(&json!({"status": {"indicator": "major"}})), None);
+        assert_eq!(claude_code_status(&json!({"components": []})), None);
+    }
+
+    #[test]
+    fn name_match_is_case_and_whitespace_tolerant() {
+        let d = json!({"components": [{"name": "  claude code (CLI) ", "status": "major_outage"}]});
+        assert_eq!(claude_code_status(&d).as_deref(), Some("major_outage"));
+    }
 }

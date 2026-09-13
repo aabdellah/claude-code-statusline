@@ -96,6 +96,10 @@ pub struct ContextWindow {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct CurrentUsage {
+    /// Uncached input tokens of the latest call — i.e. cache MISSES that
+    /// were billed at the full input rate. Needed for a true hit ratio.
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
 }

@@ -111,6 +111,14 @@ cargo build --release
   the later `expiresAt` is the active account's. Any future credential read
   must use `usage::select_token`'s rule, never "file first".
 
+- **The status segment reads `components.json`, NOT `status.json`.**
+  Statuspage's page-wide `status.indicator` is the worst status across
+  every product on status.claude.com (claude.ai, Cowork, Console,
+  Government…), so it went "minor"/"major" for incidents that couldn't
+  touch a CC session. `anthropic::claude_code_status` filters the
+  component list to the one named "Claude Code" (prefix match, case-
+  insensitive). Don't "simplify" back to the single indicator.
+
 - **`git2` MUST be `default-features = false, features = ["vendored-libgit2"]`.**
   Without `vendored-libgit2`, `git2-sys` finds brew's system libgit2 via
   pkg-config and dynamic-links to it, breaking the "self-contained

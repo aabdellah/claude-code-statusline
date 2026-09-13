@@ -3,12 +3,12 @@
 A statusline tuned for power-user / multi-agent / 1M-context / parallel-worktree
 workflows. Renders model · repo · context · effort · rate limits · cache ·
 cost · perf · duration into a single scannable line, with a compact fallback
-for narrow terminals and a CRIT banner when multiple red signals fire at once.
+for narrow terminals and red separators when multiple red signals fire at once.
 
 ```
 Opus 4.7 · banknet2-retail/main ●3 ↑2 wt:5 2stale #247 · todo +4 ·
 ctx 78% ████████░░ 1m · xhigh · 5h 64%→1h12m 7d 71%→98% ·
-cache 84% ttl 2:47 · $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 41% · 47m
+cache 84% · $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 41% · 47m
 ```
 
 Written in Rust, ships as a single ~1.6 MB binary with zero runtime
@@ -173,7 +173,7 @@ claude-code-statusline/
 │   ├── format.rs          # null-safe value formatters (full + compact)
 │   ├── git.rs             # git status, todo Δ, worktree stats (libgit2)
 │   ├── transcript.rs      # JSONL tail reader + derived metrics
-│   ├── anthropic.rs       # status.claude.com check (cached + bg refresh)
+│   ├── anthropic.rs       # status.claude.com "Claude Code" component check (cached + bg refresh)
 │   ├── pace.rs            # 7-day rate-limit pace projection
 │   ├── probe.rs           # --usage-json / --wait-until quota probe for schedulers
 │   ├── platform.rs        # OS seam: home/tmp dirs, detached spawn, local midnight, console width
@@ -192,8 +192,8 @@ segments until the line fits the detected terminal width.
 
 | Tier | Segments | Behavior |
 |---|---|---|
-| Critical | `model`, `context`, CRIT banner | Never drops; can only downgrade variants |
-| Important | `repo/branch`, `cost`, `capabilities`, `anthropic-status` | Drops last |
+| Critical | `model`, `context` | Never drops; can only downgrade variants |
+| Important | `repo/branch`, `cost`, `capabilities`, `claude-code-status` | Drops last |
 | Normal | `rate-limits`, `cache`, `duration` | Drops in tight layouts |
 | Optional | `yak`, `todo`, `pr`, `wt`, `perf`, `output-style`, `cwd-drift`, `destruction` | Drops first |
 
@@ -232,7 +232,7 @@ $ STATUSLINE_DEBUG_TIMING=1 ./target/release/statusline < input.json
 [statusline:timing] total=6.2ms 200cols mode=auto→full len=86
      2.14ms  todo-delta      (libgit2 diff)
      1.91ms  git-status      (libgit2 status + ahead/behind + stash)
-     1.42ms  anthropic-status (stat /tmp/cc-anthropic-status.json)
+     1.42ms  anthropic-status (stat /tmp/cc-anthropic-components.json)
      0.58ms  destruction      (transcript scan for rm/drop/--hard)
      0.12ms  worktree-stats   (libgit2 worktree enumeration)
      0.01ms  gitdir-discover  (walk up looking for .git)
