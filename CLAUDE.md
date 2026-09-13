@@ -142,7 +142,17 @@ cargo build --release
   has finished its response and the latest transcript entry is back in
   the main thread. Implication: "current state" metrics rarely fire in
   practice — design new signals as "max this session" / "in last N min"
-  rather than "right now" for them to actually be visible.
+  rather than "right now" for them to actually be visible. The cache
+  segment is the worked example: the per-call hit % of the *last* call
+  of a turn is always warm, so it aggregates over the whole turn and
+  renders only when the ratio is bad.
+
+- **One API call = several transcript lines.** CC writes one `assistant`
+  entry per content block (thinking / text / tool_use); they share
+  `message.id` and each repeats the SAME `usage`. Any transcript sum of
+  `usage.*` must dedupe on `message.id` or it double/triple counts. A
+  real user prompt has string `content`; `type: "user"` entries whose
+  content is a `tool_result` list are tool bounces, not turn boundaries.
 
 - **Fresh / worktree sessions send near-empty JSON until first model
   interaction.** Only `workspace.*` and `worktree.*` are populated; model,

@@ -8,6 +8,7 @@
 
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -58,6 +59,69 @@ fn read_transcript_tail_n(transcript_path: Option<&str>, max_bytes: u64) -> Vec<
         }
     }
     entries
+}
+
+/// Prompt-cache token totals aggregated over every API call of the latest
+/// turn (all assistant entries after the most recent real user prompt).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnCacheUsage {
+    /// Uncached input tokens — misses billed at the full input rate.
+    pub input: u64,
+    /// Cache-write tokens — misses billed at the write premium.
+    pub create: u64,
+    /// Cache-read tokens — hits.
+    pub read: u64,
+}
+
+/// Is this entry a real user prompt (turn boundary) rather than a
+/// tool_result bounce? CC writes both with `type: "user"`; prompts carry a
+/// string `content` (or a block list with no `tool_result`), tool results
+/// carry a block list made of `tool_result` entries.
+fn is_user_prompt(e: &Value) -> bool {
+    if e.get("type").and_then(|v| v.as_str()) != Some("user") {
+        return false;
+    }
+    match e.get("message").and_then(|m| m.get("content")) {
+        Some(Value::String(_)) => true,
+        Some(Value::Array(blocks)) => !blocks.iter().any(|b| {
+            b.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+        }),
+        _ => false,
+    }
+}
+
+/// Sum cache usage over the latest turn. Walks back from the newest entry
+/// to the most recent user prompt, deduplicating assistant entries by
+/// `message.id` — CC writes one transcript line per content block
+/// (thinking / text / tool_use) and repeats the same `usage` on each, so a
+/// naive sum would double or triple count every call.
+///
+/// Returns `None` when the tail holds no assistant usage at all.
+pub fn last_turn_cache_usage(entries: &[Value]) -> Option<TurnCacheUsage> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut acc = TurnCacheUsage::default();
+    let mut any = false;
+    for e in entries.iter().rev() {
+        if is_user_prompt(e) {
+            break;
+        }
+        if e.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(msg) = e.get("message") else { continue };
+        let Some(usage) = msg.get("usage") else { continue };
+        if let Some(id) = msg.get("id").and_then(|v| v.as_str())
+            && !seen.insert(id)
+        {
+            continue;
+        }
+        let n = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        acc.input = acc.input.saturating_add(n("input_tokens"));
+        acc.create = acc.create.saturating_add(n("cache_creation_input_tokens"));
+        acc.read = acc.read.saturating_add(n("cache_read_input_tokens"));
+        any = true;
+    }
+    if any { Some(acc) } else { None }
 }
 
 struct LastTurn {
@@ -263,5 +327,40 @@ mod tests {
         ];
         // The leaf points to root; walk depth = 1 (not 0 due to fake cycle).
         assert_eq!(yak_depth(&entries), 1);
+    }
+
+    fn asst(id: &str, input: u64, create: u64, read: u64, block: &str) -> Value {
+        json!({"type":"assistant","message":{"id":id,"content":[{"type":block}],
+            "usage":{"input_tokens":input,"cache_creation_input_tokens":create,"cache_read_input_tokens":read,"output_tokens":10}}})
+    }
+
+    #[test]
+    fn turn_cache_dedupes_split_assistant_entries() {
+        let entries = vec![
+            json!({"type":"user","message":{"content":"hi"}}),
+            asst("m1", 2, 600, 80_000, "thinking"),
+            asst("m1", 2, 600, 80_000, "tool_use"),
+            json!({"type":"user","message":{"content":[{"type":"tool_result"}]}}),
+            asst("m2", 30, 2000, 83_000, "text"),
+        ];
+        let u = last_turn_cache_usage(&entries).unwrap();
+        assert_eq!(u, TurnCacheUsage { input: 32, create: 2600, read: 163_000 });
+    }
+
+    #[test]
+    fn turn_cache_stops_at_previous_user_prompt() {
+        let entries = vec![
+            asst("old", 50_000, 0, 0, "text"),
+            json!({"type":"user","message":{"content":[{"type":"text","text":"next"}]}}),
+            asst("new", 1, 1, 1, "text"),
+        ];
+        let u = last_turn_cache_usage(&entries).unwrap();
+        assert_eq!(u, TurnCacheUsage { input: 1, create: 1, read: 1 });
+    }
+
+    #[test]
+    fn turn_cache_none_without_assistant_usage() {
+        let entries = vec![json!({"type":"user","message":{"content":"hi"}})];
+        assert_eq!(last_turn_cache_usage(&entries), None);
     }
 }

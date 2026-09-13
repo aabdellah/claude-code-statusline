@@ -43,6 +43,10 @@ pub struct RenderContext<'a> {
     pub yak_depth: u32,
     /// Count of destructive Bash invocations in the visible transcript tail.
     pub destruction_count: u32,
+    /// Prompt-cache token totals summed over every API call of the latest
+    /// turn (deduped per message id). `None` when the transcript tail has
+    /// no assistant usage.
+    pub turn_cache: Option<transcript::TurnCacheUsage>,
     /// Output tok/s rate from the most recent assistant turn.
     pub tok_rate: Option<f64>,
     /// Approximate first-token latency (ms) for the most recent assistant turn.
@@ -132,6 +136,7 @@ impl<'a> RenderContext<'a> {
         } else {
             0
         };
+        let turn_cache = transcript::last_turn_cache_usage(&transcript);
         let tok_rate = transcript::last_turn_output_rate(&transcript);
         let ftl_ms = config::timed("ftl", cfg.debug_timing, || {
             transcript::first_token_latency_ms(&transcript)
@@ -178,7 +183,7 @@ impl<'a> RenderContext<'a> {
             in_repo, in_worktree, branch,
             git_status, worktree_stats,
             today,
-            yak_depth, destruction_count, tok_rate, ftl_ms,
+            yak_depth, destruction_count, turn_cache, tok_rate, ftl_ms,
             todo_delta, plugin_styles, oauth_scoped,
         }
     }
@@ -227,6 +232,7 @@ impl<'a> RenderContext<'a> {
             today: None,
             yak_depth: 0,
             destruction_count: 0,
+            turn_cache: None,
             tok_rate: None,
             ftl_ms: None,
             todo_delta: 0,
