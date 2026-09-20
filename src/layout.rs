@@ -289,6 +289,7 @@ mod tests {
             debug_width: false,
             show_plugins: false,
             no_blink: false,
+            autocompact: Default::default(),
         }
     }
 

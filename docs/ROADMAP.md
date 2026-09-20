@@ -37,6 +37,7 @@ where it lives.
 | Segment | Where | Notes |
 |---|---|---|
 | Context % + gradient bar | `src/ansi.rs` :: `gradient_bar` | 24-bit truecolor green→yellow→red |
+| Auto-compact distance | `src/config.rs` :: `AutoCompact::trigger` | `ctx %` is relative to CC's compaction trigger (`CLAUDE_CODE_AUTO_COMPACT_WINDOW` or model window, minus 20k reserve and 13k buffer), so 100% == compaction. Suffix shows the trigger. |
 | Boss-fight mode | `src/ansi.rs` :: `gradient_bar` | ≥85% crit red + ▒ damage cells; ≥90% adds ANSI blink + █/▓ flicker |
 | Context window size | `src/format.rs` :: `fmt_ctx_size` | `1m` / `1.5m` / `200k` |
 | `200k+` overflow warn | `src/render.rs` | Red-signal |
@@ -120,10 +121,6 @@ are the ones either novel to us or convergently validated across peers.
 5. **Compact counter** — `cmp:3` (number of auto-compactions this session).
    After 3-4 compactions model quality drifts; surface it as hard data.
    _Data: scan transcript JSONL for compaction event markers._
-
-6. **Auto-compact distance** — `cmp in 12%` (replaces `ctx 78%` framing
-   above ~70%). Distance-to-event vs absolute usage; more actionable.
-   _Data: ctx % math; just a re-frame of the existing segment._
 
 7. **Burn acceleration** — `$24/h ↑` when last 10 min is N× the session
    average. Catches runaway agents in real time, not after the bill arrives.

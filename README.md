@@ -7,7 +7,7 @@ for narrow terminals and red separators when multiple red signals fire at once.
 
 ```
 Opus 4.7 · xhigh · banknet2-retail/main ●3 ↑2 wt:5 2stale #247 · todo +4 ·
-ctx 78% ████████░░ 1m · 5h 64%→1h12m 7d 71%→98% ·
+ctx 78% ████████░░ 967k · 5h 64%→1h12m 7d 71%→98% ·
 $4.21 $12.4/h +247/-89 $0.017/LOC lpm 49 · 142t/s · api 41% · 47m
 ```
 
@@ -121,6 +121,7 @@ keys preserved), and the auto-rebuild job if installed.
 | `STATUSLINE_DEBUG_TIMING=1` | Print per-segment ms to stderr |
 | `STATUSLINE_SHOW_PLUGINS=1` | Show `learning+explanatory` plugin styles |
 | `STATUSLINE_NO_BLINK=1` | Disable boss-fight blink at ≥90% context |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW=N` | Claude Code's own setting; read here so `ctx %` measures distance to auto-compaction (100% = compaction) instead of fill of the model window. The suffix after the bar is the trigger token count. `DISABLE_AUTO_COMPACT=1` reverts to raw window fill. |
 | `STATUSLINE_HIDE=mileage,perf,duration` | Suppress specific segments |
 | `STATUSLINE_MODE=auto\|full\|compact` | `auto` (default) = adaptive layout; `full` = every segment at full text; `compact` = every segment at smallest variant |
 | `STATUSLINE_WIDTH=N` | Force terminal width (for testing) |
@@ -200,10 +201,10 @@ segments until the line fits the detected terminal width.
 Example degradation for a session in a git repo with cost data:
 
 ```
-width=220 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · 5h 64% 7d 71% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
-width=130 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
-width=100 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 1m · $4.2 $5.4/h +247/-89
-width=80  → Opus 4.7 · medium · claude/main ○3+1 · ctx 78% ████████░░ 1m · $4.21
+width=220 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 967k · 5h 64% 7d 71% · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=130 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 967k · $4.21 $5.37/h +247/-89 $0.017/LOC · 47m
+width=100 → Opus 4.7 · medium · claude-code-statusline/main ○3+1 · ctx 78% ████████░░ 967k · $4.2 $5.4/h +247/-89
+width=80  → Opus 4.7 · medium · claude/main ○3+1 · ctx 78% ████████░░ 967k · $4.21
 width=60  → Opus 4.7 · main ○3+1 · 78%/1m · medium · $4.21
 width=40  → Opus 4.7 · 78%/1m · $4.21
 ```

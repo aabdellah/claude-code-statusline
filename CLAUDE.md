@@ -65,6 +65,20 @@ cargo build --release
   the 200k+ warning silently never fire for the whole life of the Node
   version and early Rust versions. The field belongs on `StatusInput`.
 
+- **`context_window.used_percentage` is fill of the MODEL window, not
+  distance to autocompact.** CC compacts at
+  `effective_window - min(max_output, 20k) - 13k`, where the effective
+  window is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` if set (CC exports its
+  `settings.json` env block to the statusline process), else the model
+  window. With a 200k model and a 150k autocompact window, CC's own number
+  reads 58% at the moment it compacts. The ctx segment therefore divides
+  `total_input_tokens` by `config::AutoCompact::trigger` and shows the
+  trigger as the size suffix; 100% == compaction. The reserve and buffer
+  are CC-internal constants (verified against v2.1.278), so re-check them
+  when compactions stop landing at "ctx 100%". Also note
+  `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` pins `context_window_size` to 200k
+  even for 1M models.
+
 - **`context_window.total_input_tokens` / `total_output_tokens` are
   CURRENT-WINDOW snapshots since CC v2.1.132**, not cumulative session
   totals. Anything that divides cumulative lines by these will produce

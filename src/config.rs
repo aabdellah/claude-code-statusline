@@ -49,6 +49,72 @@ pub struct Config {
     /// Disable boss-fight blink at >=90% context — for terminals where ANSI
     /// blink is jarring or unsupported.
     pub no_blink: bool,
+    /// Claude Code's autocompact knobs, read from the env CC exports to the
+    /// statusline process (its `settings.json` `env` block lands here).
+    pub autocompact: AutoCompact,
+}
+
+/// The inputs Claude Code itself uses to decide when to auto-compact.
+/// `context_window_size` on stdin is the MODEL window; compaction fires
+/// far earlier, against `window - output_reserve - buffer`. See
+/// `AutoCompact::trigger`.
+#[derive(Debug, Clone, Default)]
+pub struct AutoCompact {
+    /// `DISABLE_AUTO_COMPACT` / `DISABLE_COMPACT` set: CC never compacts,
+    /// so the model window is the only limit that matters.
+    pub disabled: bool,
+    /// `CLAUDE_CODE_AUTO_COMPACT_WINDOW` — user-chosen effective window,
+    /// smaller than the model window. `None` = use the model window.
+    pub window: Option<u64>,
+    /// `CLAUDE_CODE_MAX_OUTPUT_TOKENS` — only matters when set BELOW the
+    /// 20k reserve cap; every current model's default is above it.
+    pub max_output_tokens: Option<u64>,
+}
+
+impl AutoCompact {
+    /// CC reserves this many tokens for the model's reply (capped at the
+    /// model's max output, which is always higher for current models).
+    pub const OUTPUT_RESERVE: u64 = 20_000;
+    /// Hardcoded compaction buffer in CC's threshold function.
+    pub const BUFFER: u64 = 13_000;
+
+    pub fn from_env() -> Self {
+        let truthy = |k: &str| {
+            matches!(
+                env::var(k).ok().as_deref().map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+                Some("1") | Some("true") | Some("yes") | Some("on")
+            )
+        };
+        let num = |k: &str| {
+            env::var(k)
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .filter(|&n| n > 0)
+        };
+        Self {
+            disabled: truthy("DISABLE_AUTO_COMPACT") || truthy("DISABLE_COMPACT"),
+            window: num("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+            max_output_tokens: num("CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+        }
+    }
+
+    /// Token count at which CC auto-compacts, given the model window CC
+    /// reported on stdin. `None` when autocompact is off or the numbers
+    /// don't leave a positive threshold. Mirrors CC v2.1.278:
+    /// `effective_window - min(max_output, 20k) - 13k`, where
+    /// `effective_window` is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` if set, else
+    /// the model window.
+    pub fn trigger(&self, model_window: u64) -> Option<u64> {
+        if self.disabled || model_window == 0 {
+            return None;
+        }
+        let effective = self.window.unwrap_or(model_window).min(model_window);
+        let reserve = self
+            .max_output_tokens
+            .map_or(Self::OUTPUT_RESERVE, |m| m.min(Self::OUTPUT_RESERVE));
+        let trigger = effective.checked_sub(reserve)?.checked_sub(Self::BUFFER)?;
+        (trigger > 0).then_some(trigger)
+    }
 }
 
 impl Config {
@@ -79,6 +145,7 @@ impl Config {
             debug_width: env::var("STATUSLINE_DEBUG_WIDTH").as_deref() == Ok("1"),
             show_plugins: env::var("STATUSLINE_SHOW_PLUGINS").as_deref() == Ok("1"),
             no_blink: env::var("STATUSLINE_NO_BLINK").as_deref() == Ok("1"),
+            autocompact: AutoCompact::from_env(),
         }
     }
 
@@ -121,4 +188,45 @@ pub(crate) fn reset_timings() {
 
 pub(crate) fn drain_timings() -> Vec<(&'static str, f64)> {
     std::mem::take(&mut *timings_lock())
+}
+
+#[cfg(test)]
+mod autocompact_tests {
+    use super::AutoCompact;
+
+    fn ac(window: Option<u64>, max_out: Option<u64>) -> AutoCompact {
+        AutoCompact { disabled: false, window, max_output_tokens: max_out }
+    }
+
+    #[test]
+    fn trigger_is_window_minus_reserve_and_buffer() {
+        assert_eq!(ac(None, None).trigger(200_000), Some(167_000));
+        assert_eq!(ac(None, None).trigger(1_000_000), Some(967_000));
+    }
+
+    #[test]
+    fn autocompact_window_env_overrides_model_window() {
+        // The observed real-world case: 150k autocompact window, 200k model.
+        assert_eq!(ac(Some(150_000), None).trigger(200_000), Some(117_000));
+    }
+
+    #[test]
+    fn autocompact_window_never_exceeds_model_window() {
+        assert_eq!(ac(Some(500_000), None).trigger(200_000), Some(167_000));
+    }
+
+    #[test]
+    fn max_output_below_cap_shrinks_the_reserve() {
+        assert_eq!(ac(None, Some(8_000)).trigger(200_000), Some(179_000));
+        // Above the cap it's clamped to the 20k reserve.
+        assert_eq!(ac(None, Some(64_000)).trigger(200_000), Some(167_000));
+    }
+
+    #[test]
+    fn disabled_or_degenerate_yields_none() {
+        let off = AutoCompact { disabled: true, ..Default::default() };
+        assert_eq!(off.trigger(200_000), None);
+        assert_eq!(ac(None, None).trigger(0), None);
+        assert_eq!(ac(Some(30_000), None).trigger(200_000), None);
+    }
 }
